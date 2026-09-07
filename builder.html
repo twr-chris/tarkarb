@@ -83,6 +83,17 @@
       <option value="w">weight</option>
     </select>
   </label>
+  <label class="ctl">color by
+    <select id="colorBy">
+      <option value="">frontier</option>
+      <option value="mod_reciever">receiver</option>
+      <option value="mod_handguard">handguard</option>
+      <option value="mod_stock">stock</option>
+      <option value="mod_barrel">barrel</option>
+      <option value="mod_muzzle">muzzle</option>
+      <option value="mod_pistol_grip">grip</option>
+    </select>
+  </label>
   <label class="ctl">budget ₽ <input id="budget" type="number" value="600000" step="50000"></label>
   <label class="ctl"><input id="fleaOnly" type="checkbox"> flea only</label>
   <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
@@ -359,10 +370,18 @@ function frontier(db, gunId, opts) {
     }
     return out;
   }
+  function flatSlots(b, acc) {
+    for (const [k, v] of Object.entries(b)) {
+      if (k === "__src") continue;
+      acc[k] = db.name(v[0]);
+      flatSlots(v[1], acc);
+    }
+    return acc;
+  }
   const points = acc.map(o => ({
     ergo: Math.round(baseE + o.e), rv: Math.round(baseV * (1 + o.r)),
     rh: Math.round(baseH * (1 + o.r)), w: +o.w.toFixed(2), c: o.c,
-    src: o.b.__src, tree: renderTree(o.b),
+    src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}),
   })).sort((a, b) => a.c - b.c);
   return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap };
 }
@@ -521,10 +540,50 @@ function drawChart() {
     else path.push(`L${x},${Y(points[sky[k - 1]].c)}`, `L${x},${y}`);
   }
   svg.appendChild(el("path", { class: "envline", d: path.join(" ") }));
+  // optional: color dots by the part in a chosen slot, with legend
+  const colorBy = $("colorBy").value;
+  const PALETTE = ["#c6a55d", "#7fb069", "#9db4c9", "#b06969", "#a98fc0",
+                   "#cf9b6a", "#6fb0a5", "#c98fa8", "#b8b04a", "#7f9bd0"];
+  let colorFor = null;
+  if (colorBy) {
+    const label = p => p.slots[colorBy] || "(none)";
+    const counts = {};
+    points.forEach(p => counts[label(p)] = (counts[label(p)] || 0) + 1);
+    const ranked = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    const top = ranked.slice(0, PALETTE.length - 1);
+    const colorOf = {};
+    top.forEach((k, i) => colorOf[k] = PALETTE[i]);
+    const OTHER = "#5a564c";
+    colorFor = p => colorOf[label(p)] || OTHER;
+    // legend, top-left (expensive + bad-stat corner is empty on these charts)
+    const lx = L + 12, ly = T + 8;
+    const legend = el("g", {});
+    const entries = top.map(k => [k, counts[k]]);
+    if (ranked.length > top.length) {
+      const rest = ranked.slice(top.length).reduce((s, k) => s + counts[k], 0);
+      entries.push([`other (${ranked.length - top.length} parts)`, rest]);
+    }
+    const shorten = k => k.replace(/^AR-15 /, "").replace(/ 5\.56x45/, "")
+      .replace(/ upper receiver/, " upper").replace(/ handguard/, " HG")
+      .replace(/ buffer tube| receiver extension/, " tube").slice(0, 30);
+    legend.appendChild(el("rect", { x: lx - 8, y: ly - 8, width: 232,
+      height: entries.length * 15 + 12, fill: "#000c", stroke: "#33312c", rx: 4 }));
+    entries.forEach(([k, n], i) => {
+      const yy = ly + 6 + i * 15;
+      legend.appendChild(el("rect", { x: lx, y: yy - 6, width: 9, height: 9,
+        fill: i < top.length ? PALETTE[i] : OTHER }));
+      const t = el("text", { x: lx + 15, y: yy + 2 });
+      t.textContent = `${shorten(k)} (${n})`;
+      t.style.fontSize = "9px";
+      legend.appendChild(t);
+    });
+    svg.appendChild(legend);
+  }
   // points
   points.forEach((p, i) => {
-    const c = el("circle", { class: "pt" + (envIdx.has(i) ? " env" : "") + (selected === i ? " sel" : ""),
+    const c = el("circle", { class: "pt" + (!colorBy && envIdx.has(i) ? " env" : "") + (selected === i ? " sel" : ""),
       cx: X(good(p)), cy: Y(p.c), r: envIdx.has(i) ? 4 : 2.6, "data-i": i });
+    if (colorFor) c.style.fill = colorFor(p);
     c.addEventListener("click", () => selectPoint(i));
     c.addEventListener("mousemove", ev => {
       const tip = $("tip");
@@ -569,6 +628,7 @@ function renderTree(nodes) {
 $("run").addEventListener("click", compute);
 $("usableMag").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
+$("colorBy").addEventListener("change", drawChart);
 $("mode").addEventListener("change", () => { overlay("switching economy…"); bootWorker(); });
 
 overlay("loading item data…");
