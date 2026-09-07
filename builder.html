@@ -58,8 +58,10 @@
   #explain:empty { display: none; }
   #explain b { color: var(--text); font-weight: 600; }
   #explain .gate { color: var(--gold); cursor: pointer; border-bottom: 1px dotted var(--gold); }
-  #totals { font: 13px var(--mono); background: var(--panel2); border-radius: 5px;
-            padding: 10px 12px; margin-bottom: 10px; line-height: 1.7; }
+  .patrow { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+  #pattern { flex: 0 0 auto; background: var(--panel2); border-radius: 5px; }
+  #totals { flex: 1; font: 13px var(--mono); background: var(--panel2); border-radius: 5px;
+            padding: 10px 12px; line-height: 1.7; }
   #totals b { color: var(--gold); }
   ul.tree { list-style: none; margin: 0; padding-left: 0; font: 12px var(--mono); }
   ul.tree ul { list-style: none; padding-left: 18px; border-left: 1px solid #2a2925; margin: 0; }
@@ -81,10 +83,9 @@
     <select id="mode"><option value="pve" selected>PVE</option>
       <option value="regular">PVP</option><option value="pvp-season">PVP-S</option></select>
   </label>
-  <label class="ctl">stat
+  <label class="ctl" title="Vertical and horizontal recoil scale by the same multiplier on every weapon, so one recoil number ranks both">stat
     <select id="stat">
-      <option value="rv" selected>vertical recoil</option>
-      <option value="rh">horizontal recoil</option>
+      <option value="recoil" selected>recoil</option>
       <option value="ergo">ergonomics</option>
       <option value="w">weight</option>
     </select>
@@ -123,11 +124,17 @@
     <div class="hint">Every dot is a non-dominated build; the gold staircase is the cheapest build
       reaching each stat level — better is always rightward. Where the staircase goes vertical,
       rubles stop buying stat: that's your knee. Dashed green line is your budget. Click any dot
-      to inspect that exact build. Frontier is beam-search approximate; prices are live (~5 min).</div>
+      to inspect that exact build. Frontier is beam-search approximate; prices are live (~5 min).
+      Vertical and horizontal recoil scale by the same multiplier on every weapon (verified against
+      all 393 in-game presets), so one recoil number ranks both — the diagram beside the selected
+      build shows the direction your build can't change.</div>
   </section>
   <section id="buildbox">
     <h2>Selected build</h2>
-    <div id="totals">click a point on the chart</div>
+    <div class="patrow">
+      <svg id="pattern" width="150" height="150" viewBox="0 0 160 160"></svg>
+      <div id="totals">click a point on the chart</div>
+    </div>
     <div id="tree"></div>
   </section>
 </main>
@@ -390,9 +397,14 @@ function frontier(db, gunId, opts) {
   const points = acc.map(o => ({
     ergo: Math.round(baseE + o.e), rv: Math.round(baseV * (1 + o.r)),
     rh: Math.round(baseH * (1 + o.r)), w: +o.w.toFixed(2), c: o.c,
+    // vertical and horizontal are the SAME multiplier applied to two base
+    // numbers (verified: 393/393 presets), so one exact value ranks both.
+    rmul: 1 + o.r, rvExact: baseV * (1 + o.r),
     src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}),
   })).sort((a, b) => a.c - b.c);
-  return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap };
+  return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap,
+    weapon: { angle: gp.recoilAngle ?? 90, dispersion: gp.recoilDispersion ?? 10,
+              baseRv: baseV, baseRh: baseH } };
 }
 
 onmessage = async ev => {
@@ -422,9 +434,9 @@ onmessage = async ev => {
 "use strict";
 const $ = id => document.getElementById(id);
 const fmt = n => Math.round(n).toLocaleString("en-US");
-const STATS = { rv: ["vertical recoil", p => p.rv, true], rh: ["horizontal recoil", p => p.rh, true],
+const STATS = { recoil: ["recoil", p => p.rvExact, true],
                 ergo: ["ergonomics", p => p.ergo, false], w: ["weight kg", p => p.w, true] };
-let worker = null, points = [], selected = null, bootedMode = null;
+let worker = null, points = [], selected = null, bootedMode = null, weaponInfo = null;
 
 function setStatus(html) { $("status").innerHTML = html; }
 function overlay(msg) {
@@ -460,11 +472,12 @@ function bootWorker() {
     if (m.type === "frontier") {
       overlay(null);
       if (m.error) { setStatus(`<span class="err">${m.error}</span>`); return; }
-      points = m.points; selected = null;
+      points = m.points; selected = null; weaponInfo = m.weapon;
       setStatus(`${m.gunName}: <span class="ok">${points.length} non-dominated builds</span> ` +
         `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable` +
         `${m.minMagCap ? ` · mag ≥ ${m.minMagCap}` : ""} · click the chart`);
       drawChart();
+      drawPattern(null);                     // stock pattern until a build is picked
       $("totals").textContent = "click a point on the chart";
       $("tree").innerHTML = "";
     }
@@ -546,6 +559,64 @@ function explainClusters(idx) {
     $("colorBy").value = slot;
     drawChart();
   }));
+}
+
+// Recoil pattern: direction from the weapon's recoilAngle (90 deg = straight
+// up), spread from recoilDispersion, envelope aspect from the base rh/rv
+// ratio. All three are weapon-level and unmodifiable — only the LENGTH
+// responds to the build, scaled by its recoil multiplier.
+function drawPattern(rmul) {
+  const svg = $("pattern");
+  svg.innerHTML = "";
+  if (!weaponInfo) return;
+  const { angle, dispersion, baseRv, baseRh } = weaponInfo;
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (t, a) => { const e = document.createElementNS(NS, t);
+    for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; };
+  const cx = 80, cy = 84, R = 60;
+  const m = Math.max(0, Math.min(1.2, rmul == null ? 1 : rmul));
+  // grid
+  const grid = el("g", { stroke: "#33312c", "stroke-width": ".5", opacity: ".7" });
+  for (let p = cx - R; p <= cx + R + 1; p += R / 3) {
+    grid.appendChild(el("line", { x1: p, y1: cy - R, x2: p, y2: cy + R }));
+    grid.appendChild(el("line", { x1: cx - R, y1: p - cx + cy, x2: cx + R, y2: p - cx + cy }));
+  }
+  svg.appendChild(grid);
+  svg.appendChild(el("line", { x1: cx - R, y1: cy, x2: cx + R, y2: cy,
+    stroke: "#4a4740", "stroke-width": "1" }));
+  svg.appendChild(el("line", { x1: cx, y1: cy - R, x2: cx, y2: cy + R,
+    stroke: "#4a4740", "stroke-width": "1" }));
+  // kick envelope: aspect from rh/rv, scaled by the build multiplier
+  const mx = Math.max(baseRv, baseRh) || 1;
+  svg.appendChild(el("ellipse", { cx, cy, rx: R * 0.92 * (baseRh / mx) * m,
+    ry: R * 0.92 * (baseRv / mx) * m, fill: "none", stroke: "#6f6754",
+    "stroke-dasharray": "3 4", opacity: ".8" }));
+  // dispersion cone around the kick direction
+  const len = R * 0.92 * m;
+  const half = Math.max(4, Math.min(34, dispersion * 0.8));
+  const pt = a => [cx + Math.cos(a * Math.PI / 180) * len,
+                   cy - Math.sin(a * Math.PI / 180) * len];
+  const [x1, y1] = pt(angle - half), [x2, y2] = pt(angle + half);
+  svg.appendChild(el("path", {
+    d: `M${cx},${cy} L${x1},${y1} A${len},${len} 0 0 0 ${x2},${y2} Z`,
+    fill: "#c6a55d", opacity: ".16" }));
+  // the kick vector
+  const [ax, ay] = pt(angle);
+  svg.appendChild(el("line", { x1: cx, y1: cy, x2: ax, y2: ay,
+    stroke: "#c6a55d", "stroke-width": "2" }));
+  const head = 7, a1 = (angle + 152) * Math.PI / 180, a2 = (angle - 152) * Math.PI / 180;
+  svg.appendChild(el("polygon", { fill: "#c6a55d", points:
+    `${ax},${ay} ${ax + Math.cos(a1) * head},${ay - Math.sin(a1) * head} ` +
+    `${ax + Math.cos(a2) * head},${ay - Math.sin(a2) * head}` }));
+  // labels
+  const cap = el("text", { x: cx, y: 14, "text-anchor": "middle" });
+  cap.textContent = `${angle}° · disp ${dispersion}`;
+  cap.style.fontSize = "10px"; cap.style.fill = "#8b877c";
+  svg.appendChild(cap);
+  const sub = el("text", { x: cx, y: 156, "text-anchor": "middle" });
+  sub.textContent = rmul == null ? "stock recoil" : `${Math.round(m * 100)}% of stock`;
+  sub.style.fontSize = "10px"; sub.style.fill = "#8b877c";
+  svg.appendChild(sub);
 }
 
 function drawChart() {
@@ -705,9 +776,11 @@ function selectPoint(i) {
   selected = i;
   drawChart();
   const p = points[i];
+  drawPattern(p.rmul);
   $("totals").innerHTML =
-    `ergonomics <b>${p.ergo}</b> · recoil V <b>${p.rv}</b> / H <b>${p.rh}</b><br>` +
-    `weight ${p.w} kg · total cost <b>${fmt(p.c)} ₽</b> · gun via ${p.src}`;
+    `ergonomics <b>${p.ergo}</b><br>recoil <b>${Math.round(p.rmul * 100)}%</b> of stock ` +
+    `<span style="color:var(--dim)">(V ${p.rv} / H ${p.rh})</span><br>` +
+    `weight ${p.w} kg<br>total cost <b>${fmt(p.c)} ₽</b> · gun via ${p.src}`;
   $("tree").innerHTML = "";
   $("tree").appendChild(renderTree(p.tree));
 }
