@@ -97,12 +97,12 @@
 
 <main>
   <section id="chartbox">
-    <h2>Efficient frontier — <span id="chartlabel">vertical recoil</span> vs cost</h2>
+    <h2>Efficient frontier — cost to reach <span id="chartlabel">vertical recoil</span></h2>
     <svg id="chart" width="100%" height="480" viewBox="0 0 720 480" preserveAspectRatio="xMidYMid meet"></svg>
-    <div class="hint">Every dot is a non-dominated build found by the optimizer; the gold line is the
-      best achievable value at each price. Look for the knee — where the curve flattens, extra rubles
-      stop buying stat. Click any dot to inspect that exact build. Frontier is beam-search
-      approximate; prices are live (~5 min).</div>
+    <div class="hint">Every dot is a non-dominated build; the gold staircase is the cheapest build
+      reaching each stat level — better is always rightward. Where the staircase goes vertical,
+      rubles stop buying stat: that's your knee. Dashed green line is your budget. Click any dot
+      to inspect that exact build. Frontier is beam-search approximate; prices are live (~5 min).</div>
   </section>
   <section id="buildbox">
     <h2>Selected build</h2>
@@ -424,13 +424,25 @@ function drawChart() {
   if (!points.length) return;
   const [label, val, lowerBetter] = STATS[$("stat").value];
   $("chartlabel").textContent = label;
-  const W = 720, H = 480, L = 62, R = 16, T = 14, B = 40;
-  const xs = points.map(p => p.c), ys = points.map(val);
-  const xmin = Math.min(...xs), xmax = Math.max(...xs);
-  const ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const xpad = (xmax - xmin) * 0.04 || 1, ypad = (ymax - ymin) * 0.06 || 1;
-  const X = c => L + (c - xmin + xpad) / (xmax - xmin + 2 * xpad) * (W - L - R);
-  const Y = v => T + (1 - (v - ymin + ypad) / (ymax - ymin + 2 * ypad)) * (H - T - B);
+  const W = 720, H = 480, L = 74, R = 16, T = 14, B = 44;
+  // X = stat, oriented so better is always rightward; Y = rubles
+  const good = p => lowerBetter ? -val(p) : val(p);
+  const order = points.map((_, i) => i).sort((a, b) => good(points[a]) - good(points[b]));
+  const gs = order.map(i => good(points[i]));
+  // skyline: walk best-stat-first, keep a point only when it's cheaper than
+  // every better-stat build seen so far. That minimal staircase is the frontier.
+  const envIdx = new Set();
+  let runMin = Infinity;
+  for (let k = order.length - 1; k >= 0; k--) {
+    const c = points[order[k]].c;
+    if (c < runMin) { envIdx.add(order[k]); runMin = c; }
+  }
+  const gmin = gs[0], gmax = gs[gs.length - 1];
+  const cs = points.map(p => p.c);
+  const cmin = Math.min(...cs), cmax = Math.max(...cs);
+  const gpad = (gmax - gmin) * 0.04 || 1, cpad = (cmax - cmin) * 0.06 || 1;
+  const X = g => L + (g - gmin + gpad) / (gmax - gmin + 2 * gpad) * (W - L - R);
+  const Y = c => T + (1 - (c - cmin + cpad) / (cmax - cmin + 2 * cpad)) * (H - T - B);
   const NS = "http://www.w3.org/2000/svg";
   const el = (t, attrs) => { const e = document.createElementNS(NS, t);
     for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
@@ -439,37 +451,45 @@ function drawChart() {
   ax.appendChild(el("line", { x1: L, y1: H - B, x2: W - R, y2: H - B }));
   ax.appendChild(el("line", { x1: L, y1: T, x2: L, y2: H - B }));
   for (let i = 0; i <= 6; i++) {
-    const cv = xmin + (xmax - xmin) * i / 6;
-    const t = el("text", { x: X(cv), y: H - B + 16, "text-anchor": "middle" });
-    t.textContent = cv >= 1e6 ? (cv / 1e6).toFixed(1) + "M" : Math.round(cv / 1000) + "k";
+    const gv = gmin + (gmax - gmin) * i / 6;
+    const t = el("text", { x: X(gv), y: H - B + 16, "text-anchor": "middle" });
+    t.textContent = Math.round((lowerBetter ? -gv : gv) * 100) / 100;
     ax.appendChild(t);
-    const yv = ymin + (ymax - ymin) * i / 6;
-    const t2 = el("text", { x: L - 8, y: Y(yv) + 3, "text-anchor": "end" });
-    t2.textContent = Math.round(yv * 100) / 100;
+    const cv = cmin + (cmax - cmin) * i / 6;
+    const t2 = el("text", { x: L - 8, y: Y(cv) + 3, "text-anchor": "end" });
+    t2.textContent = cv >= 1e6 ? (cv / 1e6).toFixed(2) + "M" : Math.round(cv / 1000) + "k";
     ax.appendChild(t2);
   }
   const xl = el("text", { x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle" });
-  xl.textContent = "build cost, RUB";
+  xl.textContent = `${label} (better →)`;
   ax.appendChild(xl);
+  const yl = el("text", { x: 16, y: T + 10 });
+  yl.textContent = "cost ₽";
+  ax.appendChild(yl);
   svg.appendChild(ax);
-  // envelope: best stat at <= cost (points sorted by cost)
-  let best = null;
-  const envIdx = new Set();
+  // budget line
+  const budget = +$("budget").value || null;
+  if (budget && budget >= cmin - cpad && budget <= cmax + cpad) {
+    svg.appendChild(el("line", { x1: L, y1: Y(budget), x2: W - R, y2: Y(budget),
+      stroke: "#7fb069", "stroke-dasharray": "5 5", opacity: ".5" }));
+    const bt = el("text", { x: W - R - 4, y: Y(budget) - 5, "text-anchor": "end" });
+    bt.textContent = "budget";
+    bt.style.fill = "#7fb069";
+    svg.appendChild(bt);
+  }
+  // envelope staircase through the skyline corners, ascending stat
+  const sky = order.filter(i => envIdx.has(i)).sort((a, b) => good(points[a]) - good(points[b]));
   const path = [];
-  points.forEach((p, i) => {
-    const v = val(p);
-    if (best === null || (lowerBetter ? v < best : v > best)) {
-      best = v; envIdx.add(i);
-      path.push(`${path.length ? "L" : "M"}${X(p.c)},${Y(v)}`);
-    } else {
-      path.push(`L${X(p.c)},${Y(best)}`);
-    }
-  });
+  for (let k = 0; k < sky.length; k++) {
+    const x = X(good(points[sky[k]])), y = Y(points[sky[k]].c);
+    if (!path.length) path.push(`M${x},${y}`);
+    else path.push(`L${x},${Y(points[sky[k - 1]].c)}`, `L${x},${y}`);
+  }
   svg.appendChild(el("path", { class: "envline", d: path.join(" ") }));
   // points
   points.forEach((p, i) => {
     const c = el("circle", { class: "pt" + (envIdx.has(i) ? " env" : "") + (selected === i ? " sel" : ""),
-      cx: X(p.c), cy: Y(val(p)), r: envIdx.has(i) ? 4 : 2.6, "data-i": i });
+      cx: X(good(p)), cy: Y(p.c), r: envIdx.has(i) ? 4 : 2.6, "data-i": i });
     c.addEventListener("click", () => selectPoint(i));
     c.addEventListener("mousemove", ev => {
       const tip = $("tip");
