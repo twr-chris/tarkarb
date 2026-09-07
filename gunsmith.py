@@ -238,11 +238,41 @@ def scalarize(goal: str):
     return lambda o: (o[0] - 250 * o[1] - o[2] / 50000,)  # balanced blend
 
 
+def default_mag_cap(db: DB, gun_id: str) -> int:
+    """Capacity of the magazine the gun ships with in its default preset -
+    the 'what you buy from a trader' floor for usable magazine size."""
+    dp = db.props(gun_id).get("defaultPreset")
+    dpid = dp if isinstance(dp, str) else (dp or {}).get("id")
+    preset = db.items.get(dpid) if dpid else None
+    if not preset:
+        return 0
+    cap = 0
+    for ci in preset.get("containsItems") or []:
+        iid = ci["item"] if isinstance(ci["item"], str) else ci["item"].get("id")
+        pp = db.props(iid)
+        if pp.get("propertiesType") == "ItemPropertiesMagazine":
+            cap = max(cap, pp.get("capacity") or 0)
+    return cap
+
+
 def optimize(db: DB, gun_id: str, goal: str, budget: int | None,
-             flea_only: bool, max_ll: int) -> None:
+             flea_only: bool, max_ll: int, usable_mag: bool = False) -> None:
     score = scalarize(goal)
     memo: dict[str, list] = {}
     unavailable = set()
+    min_mag_cap = default_mag_cap(db, gun_id) if usable_mag else 0
+
+    def mag_ok(cand: str) -> bool:
+        if not min_mag_cap:
+            return True
+        pp = db.props(cand)
+        if pp.get("propertiesType") != "ItemPropertiesMagazine":
+            return True
+        return (pp.get("capacity") or 0) >= min_mag_cap
+
+    def is_mag_slot(slot: dict, allowed: list) -> bool:
+        return slot.get("nameId") == "mod_magazine" or any(
+            db.props(i).get("propertiesType") == "ItemPropertiesMagazine" for i in allowed)
 
     def options_for(iid: str, stack: frozenset):
         """Pareto options for taking item iid incl. its whole subtree.
@@ -265,11 +295,13 @@ def optimize(db: DB, gun_id: str, goal: str, budget: int | None,
         if iid in stack:                       # cycle guard: bare item only
             return acc
         for slot in p.get("slots") or []:
-            allowed = (slot.get("filters") or {}).get("allowedItems") or []
-            slot_opts = [] if slot.get("required") else [None]
-            for cand in allowed:
-                slot_opts.extend((cand, o) for o in options_for(cand, stack | {iid}))
-            if slot.get("required") and not slot_opts:
+            allowed = [c for c in ((slot.get("filters") or {}).get("allowedItems") or [])
+                       if mag_ok(c)]
+            pairs = [(cand, o) for cand in allowed
+                     for o in options_for(cand, stack | {iid})]
+            force_mag = bool(is_mag_slot(slot, allowed) and min_mag_cap and pairs)
+            slot_opts = pairs if (slot.get("required") or force_mag) else [None, *pairs]
+            if slot.get("required") and not pairs:
                 return []                      # unbuildable
             acc = merge(acc, slot.get("nameId", slot.get("id", "?")), slot_opts)
             if not acc:
@@ -336,11 +368,13 @@ def optimize(db: DB, gun_id: str, goal: str, budget: int | None,
     acc = [(0.0, 0.0, pr[0], gun.get("weight") or 0, {"__src": pr[1]},
             frozenset(gun.get("conflictingItems") or []))]
     for slot in gp.get("slots") or []:
-        allowed = (slot.get("filters") or {}).get("allowedItems") or []
-        slot_opts = [] if slot.get("required") else [None]
-        for cand in allowed:
-            slot_opts.extend((cand, o) for o in options_for(cand, frozenset({gun_id})))
-        if slot.get("required") and not slot_opts:
+        allowed = [c for c in ((slot.get("filters") or {}).get("allowedItems") or [])
+                   if mag_ok(c)]
+        pairs = [(cand, o) for cand in allowed
+                 for o in options_for(cand, frozenset({gun_id}))]
+        force_mag = bool(is_mag_slot(slot, allowed) and min_mag_cap and pairs)
+        slot_opts = pairs if (slot.get("required") or force_mag) else [None, *pairs]
+        if slot.get("required") and not pairs:
             sys.exit(f"required slot {slot.get('nameId')} has no available parts "
                      f"under current filters")
         acc = merge(acc, slot.get("nameId", "?"), slot_opts)
@@ -386,6 +420,9 @@ def main() -> None:
     ap.add_argument("--goal", default="recoil", choices=["ergo", "recoil", "balanced"])
     ap.add_argument("--budget", type=int)
     ap.add_argument("--flea-only", action="store_true")
+    ap.add_argument("--usable-mag", action="store_true",
+                    help="require a magazine at least as large as the gun's default "
+                         "trader magazine (no tiny-mag ergo cheese)")
     ap.add_argument("--max-level", type=int, default=4, help="max trader loyalty level")
     args = ap.parse_args()
 
@@ -400,7 +437,7 @@ def main() -> None:
         print_tree(db, gid, 1, args.depth, (gid,))
     if args.build:
         optimize(db, db.find_weapon(args.build), args.goal, args.budget,
-                 args.flea_only, args.max_level)
+                 args.flea_only, args.max_level, args.usable_mag)
     if not any((args.validate, args.family, args.tree, args.build)):
         ap.print_help()
 

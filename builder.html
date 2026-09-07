@@ -85,6 +85,7 @@
   </label>
   <label class="ctl">budget ₽ <input id="budget" type="number" value="600000" step="50000"></label>
   <label class="ctl"><input id="fleaOnly" type="checkbox"> flea only</label>
+  <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
   <label class="ctl">max LL
     <select id="maxLL"><option>1</option><option>2</option><option>3</option>
       <option selected>4</option></select>
@@ -194,10 +195,31 @@ function validate(db) {
 // mod subtrees use a narrower beam than the root frontier.
 const BEAM_MOD = 160, BEAM_ROOT = 700, SLOT_CAP = 150;
 
+function defaultMagCap(db, gunId) {
+  const dp = db.props(gunId).defaultPreset;
+  const dpid = typeof dp === "string" ? dp : dp?.id;
+  const preset = dpid ? db.items[dpid] : null;
+  if (!preset) return 0;
+  let cap = 0;
+  for (const ci of preset.containsItems || []) {
+    const iid = typeof ci.item === "string" ? ci.item : ci.item?.id;
+    const p = db.props(iid);
+    if (p.propertiesType === "ItemPropertiesMagazine") cap = Math.max(cap, p.capacity || 0);
+  }
+  return cap;
+}
+
 function frontier(db, gunId, opts) {
-  const { fleaOnly, maxLL, budget } = opts;
+  const { fleaOnly, maxLL, budget, usableMag } = opts;
   const memo = new Map();
   const excludedSet = new Set();
+  const minMagCap = usableMag ? defaultMagCap(db, gunId) : 0;
+  const magOK = cand => {
+    if (!minMagCap) return true;
+    const p = db.props(cand);
+    if (p.propertiesType !== "ItemPropertiesMagazine") return true;
+    return (p.capacity || 0) >= minMagCap;
+  };
 
   const qkey = o => `${Math.round(o.e)}|${Math.round(o.r / 0.005)}|${Math.round(o.c / 2500)}|${Math.round(o.w / 0.1)}`;
   const balanced = o => o.e - 250 * o.r - o.c / 100000;
@@ -264,13 +286,23 @@ function frontier(db, gunId, opts) {
     return prune(light, beam).map(x => x.a !== undefined ? materialize(x, slotName) : x);
   }
 
-  function slotOptions(allowed, required, stack) {
+  function isMagSlot(slot, allowed) {
+    return slot.nameId === "mod_magazine" ||
+      allowed.some(id => db.props(id).propertiesType === "ItemPropertiesMagazine");
+  }
+
+  function slotOptions(allowed, required, stack, magSlot) {
     const raw = [];
-    for (const cand of allowed)
+    for (const cand of allowed) {
+      if (!magOK(cand)) continue;
       for (const o of optionsFor(cand, stack))
         raw.push({ e: o.e, r: o.r, c: o.c, w: o.w, cand, o });
+    }
     const pruned = prune(raw, SLOT_CAP);
-    return required ? pruned : [null, ...pruned];
+    // usable-mag forces a real magazine present: drop the empty option, but
+    // only if at least one qualifying mag is actually buyable (else no nuke)
+    const forceMag = magSlot && minMagCap > 0 && pruned.length > 0;
+    return (required || forceMag) ? pruned : [null, ...pruned];
   }
 
   function optionsFor(iid, stack) {
@@ -287,7 +319,8 @@ function frontier(db, gunId, opts) {
     if (stack.has(iid)) return acc;                 // cycle guard: bare item
     const st = new Set(stack); st.add(iid);
     for (const slot of p.slots || []) {
-      const so = slotOptions((slot.filters || {}).allowedItems || [], slot.required, st);
+      const allowed = (slot.filters || {}).allowedItems || [];
+      const so = slotOptions(allowed, slot.required, st, isMagSlot(slot, allowed));
       if (slot.required && !so.length) return [];
       acc = merge(acc, slot.nameId || slot.id || "?", so, BEAM_MOD);
       if (!acc.length) return [];
@@ -305,7 +338,8 @@ function frontier(db, gunId, opts) {
   for (let i = 0; i < slots.length; i++) {
     const slot = slots[i];
     postMessage({ type: "progress", msg: `solving ${slot.nameId} (${i + 1}/${slots.length})…` });
-    const so = slotOptions((slot.filters || {}).allowedItems || [], slot.required, new Set([gunId]));
+    const allowed = (slot.filters || {}).allowedItems || [];
+    const so = slotOptions(allowed, slot.required, new Set([gunId]), isMagSlot(slot, allowed));
     if (slot.required && !so.length)
       return { error: `required slot ${slot.nameId} has no buyable parts under filters` };
     acc = merge(acc, slot.nameId || "?", so, BEAM_ROOT);
@@ -330,7 +364,7 @@ function frontier(db, gunId, opts) {
     rh: Math.round(baseH * (1 + o.r)), w: +o.w.toFixed(2), c: o.c,
     src: o.b.__src, tree: renderTree(o.b),
   })).sort((a, b) => a.c - b.c);
-  return { points, gunName: db.name(gunId), excluded: excludedSet.size };
+  return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap };
 }
 
 onmessage = async ev => {
@@ -400,7 +434,8 @@ function bootWorker() {
       if (m.error) { setStatus(`<span class="err">${m.error}</span>`); return; }
       points = m.points; selected = null;
       setStatus(`${m.gunName}: <span class="ok">${points.length} non-dominated builds</span> ` +
-        `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable under filters · click the chart`);
+        `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable` +
+        `${m.minMagCap ? ` · mag ≥ ${m.minMagCap}` : ""} · click the chart`);
       drawChart();
       $("totals").textContent = "click a point on the chart";
       $("tree").innerHTML = "";
@@ -414,7 +449,7 @@ function compute() {
   worker.postMessage({
     type: "frontier", mode: $("mode").value, gunId: $("gun").value,
     fleaOnly: $("fleaOnly").checked, maxLL: +$("maxLL").value,
-    budget: +$("budget").value || null,
+    budget: +$("budget").value || null, usableMag: $("usableMag").checked,
   });
 }
 
@@ -532,6 +567,7 @@ function renderTree(nodes) {
 }
 
 $("run").addEventListener("click", compute);
+$("usableMag").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
 $("mode").addEventListener("change", () => { overlay("switching economy…"); bootWorker(); });
 
