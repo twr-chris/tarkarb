@@ -288,13 +288,13 @@ def optimize(db: DB, gun_id: str, goal: str, budget: int | None,
                 cand, (e2, r2, c2, w2, b2, cf2) = so
                 if budget is not None and c + c2 > budget:
                     continue
-                if cand in cf:                 # new part is forbidden by current build
+                if set(collect_ids(cand, b2)) & cf:   # incoming parts forbidden by build
                     continue
-                if cf2 & set(collect_ids(None, b)):   # current build forbidden by new part
+                if cf2 & set(collect_ids(None, b)):   # current parts forbidden by incoming
                     continue
                 nb = dict(b)
                 nb[slot_name] = (cand, b2)
-                out.append((e + e2, r + r2, c + c2, w + w2, nb, cf | cf2 | {cand}))
+                out.append((e + e2, r + r2, c + c2, w + w2, nb, cf | cf2))
         return prune(out)
 
     def collect_ids(root, b):

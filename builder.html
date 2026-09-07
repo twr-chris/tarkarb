@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TARKARB Builder — Bang for the Ruble</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔧</text></svg>">
+<style>
+  :root {
+    --bg: #131312; --panel: #1c1b19; --panel2: #232220; --line: #33312c;
+    --text: #d6d2c8; --dim: #8b877c; --gold: #c6a55d; --green: #7fb069;
+    --red: #b06969; --blue: #9db4c9; --mono: "Cascadia Code", Consolas, "SF Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--dim); }
+  a:hover { color: var(--gold); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+           padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0 6px 0 0; letter-spacing: 3px; color: var(--gold); font-weight: 600; }
+  header h1 span { color: var(--dim); font-weight: 400; letter-spacing: 0; font-size: 12px; margin-left: 8px; }
+  .ctl { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim);
+         text-transform: uppercase; letter-spacing: 1px; }
+  .ctl input, .ctl select { background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 12px var(--mono); }
+  .ctl input[type=number] { width: 95px; }
+  .ctl input[type=checkbox] { accent-color: var(--gold); }
+  #gun { max-width: 300px; }
+  button { background: var(--gold); color: #1a1912; border: 0; border-radius: 4px;
+           padding: 6px 16px; font-weight: 600; cursor: pointer; letter-spacing: 1px; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { padding: 7px 20px; color: var(--dim); font: 12px var(--mono); min-height: 18px; }
+  #status .ok { color: var(--green); } #status .err { color: var(--red); }
+
+  main { display: flex; flex-wrap: wrap; gap: 18px; padding: 6px 20px 50px;
+         max-width: 1500px; margin: 0 auto; align-items: flex-start; }
+  #chartbox { flex: 1 1 560px; min-width: 460px; background: var(--panel);
+              border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
+  #buildbox { flex: 0 1 460px; min-width: 380px; background: var(--panel);
+              border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
+  h2 { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: var(--gold);
+       margin: 0 0 10px; }
+  .hint { color: var(--dim); font-size: 12px; margin: 6px 0 0; }
+  svg text { fill: var(--dim); font: 10px var(--mono); }
+  .axis line, .axis path { stroke: var(--line); }
+  .pt { fill: #6f6754; cursor: pointer; }
+  .pt.env { fill: var(--gold); }
+  .pt.sel { fill: var(--green); stroke: var(--green); stroke-width: 4; }
+  .envline { fill: none; stroke: var(--gold); stroke-width: 1.4; opacity: .8; }
+  #tip { position: fixed; pointer-events: none; background: #000d; color: var(--text);
+         border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px;
+         font: 11px var(--mono); display: none; z-index: 10; white-space: pre; }
+  #totals { font: 13px var(--mono); background: var(--panel2); border-radius: 5px;
+            padding: 10px 12px; margin-bottom: 10px; line-height: 1.7; }
+  #totals b { color: var(--gold); }
+  ul.tree { list-style: none; margin: 0; padding-left: 0; font: 12px var(--mono); }
+  ul.tree ul { list-style: none; padding-left: 18px; border-left: 1px solid #2a2925; margin: 0; }
+  ul.tree li { padding: 2px 0; }
+  .slotname { color: var(--dim); }
+  .src { color: var(--blue); } .stat-good { color: var(--green); } .stat-bad { color: var(--red); }
+  #overlay { position: fixed; inset: 0; background: #131312cc; display: none;
+             align-items: center; justify-content: center; z-index: 20; }
+  #overlay div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 22px 30px; font: 13px var(--mono); color: var(--gold); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TARKARB BUILDER<span>bang for the ruble</span></h1>
+  <label class="ctl">gun <select id="gun"><option>loading…</option></select></label>
+  <label class="ctl">mode
+    <select id="mode"><option value="pve" selected>PVE</option>
+      <option value="regular">PVP</option><option value="pvp-season">PVP-S</option></select>
+  </label>
+  <label class="ctl">stat
+    <select id="stat">
+      <option value="rv" selected>vertical recoil</option>
+      <option value="rh">horizontal recoil</option>
+      <option value="ergo">ergonomics</option>
+      <option value="w">weight</option>
+    </select>
+  </label>
+  <label class="ctl">budget ₽ <input id="budget" type="number" value="600000" step="50000"></label>
+  <label class="ctl"><input id="fleaOnly" type="checkbox"> flea only</label>
+  <label class="ctl">max LL
+    <select id="maxLL"><option>1</option><option>2</option><option>3</option>
+      <option selected>4</option></select>
+  </label>
+  <button id="run">COMPUTE</button>
+  <a href="index.html" style="margin-left:auto">← ARBITRAGE BOARD</a>
+</header>
+
+<div id="status">booting worker…</div>
+
+<main>
+  <section id="chartbox">
+    <h2>Efficient frontier — <span id="chartlabel">vertical recoil</span> vs cost</h2>
+    <svg id="chart" width="100%" height="480" viewBox="0 0 720 480" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="hint">Every dot is a non-dominated build found by the optimizer; the gold line is the
+      best achievable value at each price. Look for the knee — where the curve flattens, extra rubles
+      stop buying stat. Click any dot to inspect that exact build. Frontier is beam-search
+      approximate; prices are live (~5 min).</div>
+  </section>
+  <section id="buildbox">
+    <h2>Selected build</h2>
+    <div id="totals">click a point on the chart</div>
+    <div id="tree"></div>
+  </section>
+</main>
+
+<div id="tip"></div>
+<div id="overlay"><div id="overlaymsg">crunching…</div></div>
+
+<script type="text/plain" id="workercode">
+"use strict";
+const API = "https://json.tarkov.dev";
+const DBs = {};
+const BEAM = 500;
+
+async function getJson(path) {
+  const r = await fetch(API + path, { cache: "no-cache", headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
+  return r.json();
+}
+
+async function loadDB(mode) {
+  if (DBs[mode]) return DBs[mode];
+  postMessage({ type: "progress", msg: `downloading ${mode} item data…` });
+  const [raw, tr] = await Promise.all([getJson(`/${mode}/items`), getJson(`/${mode}/items_en`)]);
+  const items = raw.data.items, names = tr.data;
+  const db = {
+    items,
+    name: id => { const it = items[id]; return it ? (names[it.name] ?? it.normalizedName ?? id) : id; },
+    props: id => (items[id] || {}).properties || {},
+    conflictUniverse: new Set(),
+  };
+  for (const it of Object.values(items))
+    for (const c of it.conflictingItems || []) db.conflictUniverse.add(c);
+  DBs[mode] = db;
+  return db;
+}
+
+function modStats(p) { return [p.ergonomics || 0, p.recoilModifier || 0]; }
+
+function priceOf(db, iid, fleaOnly, maxLL) {
+  const it = db.items[iid];
+  if (!it) return null;
+  let best = null;
+  const noFlea = (it.types || []).some(t => t.toLowerCase() === "noflea");
+  if (it.lastLowPrice && !noFlea) best = [it.lastLowPrice, "Flea"];
+  if (!fleaOnly) {
+    for (const o of it.buyFromTrader || []) {
+      if (o.taskUnlock) continue;
+      if ((o.minTraderLevel || 1) > maxLL) continue;
+      if (o.priceRUB && (!best || o.priceRUB < best[0])) best = [o.priceRUB, `LL${o.minTraderLevel}`];
+    }
+  }
+  return best;
+}
+
+function validate(db) {
+  let n = 0, passed = 0;
+  for (const pr of Object.values(db.items)) {
+    const pp = pr.properties || {};
+    if (pp.propertiesType !== "ItemPropertiesPreset") continue;
+    const base = pp.baseItem;
+    if (!base || !db.items[base]) continue;
+    if (db.props(base).propertiesType !== "ItemPropertiesWeapon") continue;
+    if (pp.ergonomics == null || pp.recoilVertical == null) continue;
+    let e = db.props(base).ergonomics || 0, r = 0;
+    for (const ci of pr.containsItems || []) {
+      const iid = typeof ci.item === "string" ? ci.item : ci.item?.id;
+      if (!iid || iid === base) continue;
+      const p = db.props(iid);
+      if (p.propertiesType === "ItemPropertiesAmmo") continue;
+      e += p.ergonomics || 0; r += p.recoilModifier || 0;
+    }
+    n++;
+    const bp = db.props(base);
+    const rv = (bp.recoilVertical || 0) * (1 + r), rh = (bp.recoilHorizontal || 0) * (1 + r);
+    if (Math.abs(Math.round(e) - pp.ergonomics) <= 1 &&
+        Math.abs(Math.round(rv) - pp.recoilVertical) <= 1 &&
+        Math.abs(Math.round(rh) - (pp.recoilHorizontal || 0)) <= 1) passed++;
+  }
+  return { passed, total: n };
+}
+
+// ---- optimizer: tree DP with quantized Pareto front + multi-goal beam ----
+// merge keeps light numeric records in the hot loop and materializes build
+// trees only for prune survivors; each slot's candidate list is pre-pruned;
+// mod subtrees use a narrower beam than the root frontier.
+const BEAM_MOD = 160, BEAM_ROOT = 700, SLOT_CAP = 150;
+
+function frontier(db, gunId, opts) {
+  const { fleaOnly, maxLL, budget } = opts;
+  const memo = new Map();
+  const excludedSet = new Set();
+
+  const qkey = o => `${Math.round(o.e)}|${Math.round(o.r / 0.005)}|${Math.round(o.c / 2500)}|${Math.round(o.w / 0.1)}`;
+  const balanced = o => o.e - 250 * o.r - o.c / 100000;
+
+  function prune(arr, beam) {
+    const best = new Map();
+    for (const o of arr) {
+      const k = qkey(o);
+      const cur = best.get(k);
+      if (!cur || balanced(o) > balanced(cur)) best.set(k, o);
+    }
+    let out = [...best.values()];
+    if (out.length > beam) {
+      const byErgo = [...out].sort((a, b) => b.e - a.e || a.c - b.c);
+      const byRec = [...out].sort((a, b) => a.r - b.r || a.c - b.c);
+      const byCost = [...out].sort((a, b) => a.c - b.c || balanced(b) - balanced(a));
+      const keep = new Set();
+      const third = Math.floor(beam / 3);
+      for (const arr2 of [byErgo, byRec, byCost])
+        for (let i = 0; i < third && i < arr2.length; i++) keep.add(arr2[i]);
+      out = [...keep];
+    }
+    return out;
+  }
+
+  function materialize(x, slotName) {
+    if (x.so === null) return x.a;             // slot left empty: unchanged build
+    const { cand, o } = x.so, a = x.a;
+    const b = Object.assign({}, a.b);
+    b[slotName] = [cand, o.b];
+    const cf = a.cf.size || o.cf.size ? new Set([...a.cf, ...o.cf]) : a.cf;
+    let cids = a.cids;
+    const rel = db.conflictUniverse.has(cand);
+    if (rel || o.cids.size) {
+      cids = new Set([...a.cids, ...o.cids]);
+      if (rel) cids.add(cand);
+    }
+    return { e: x.e, r: x.r, c: x.c, w: x.w, b, cf, cids };
+  }
+
+  function merge(acc, slotName, slotOpts, beam) {
+    let light = [];
+    for (const a of acc) {
+      for (const so of slotOpts) {
+        if (so === null) { light.push({ e: a.e, r: a.r, c: a.c, w: a.w, a, so: null }); continue; }
+        const o = so.o;
+        const c = a.c + o.c;
+        if (budget != null && c > budget) continue;
+        if (a.cf.size) {
+          if (a.cf.has(so.cand)) continue;
+          let cl = false;
+          for (const id of o.cids) if (a.cf.has(id)) { cl = true; break; }
+          if (cl) continue;
+        }
+        if (o.cf.size && a.cids.size) {
+          let cl = false;
+          for (const id of a.cids) if (o.cf.has(id)) { cl = true; break; }
+          if (cl) continue;
+        }
+        light.push({ e: a.e + o.e, r: a.r + o.r, c, w: a.w + o.w, a, so });
+        if (light.length > 60000) light = prune(light, beam);
+      }
+    }
+    return prune(light, beam).map(x => x.a !== undefined ? materialize(x, slotName) : x);
+  }
+
+  function slotOptions(allowed, required, stack) {
+    const raw = [];
+    for (const cand of allowed)
+      for (const o of optionsFor(cand, stack))
+        raw.push({ e: o.e, r: o.r, c: o.c, w: o.w, cand, o });
+    const pruned = prune(raw, SLOT_CAP);
+    return required ? pruned : [null, ...pruned];
+  }
+
+  function optionsFor(iid, stack) {
+    if (memo.has(iid) && !stack.has(iid)) return memo.get(iid);
+    const it = db.items[iid];
+    if (!it) return [];
+    const pr = priceOf(db, iid, fleaOnly, maxLL);
+    if (!pr) { excludedSet.add(iid); return []; }
+    const p = db.props(iid);
+    const [e0, r0] = modStats(p);
+    let acc = [{ e: e0, r: r0, c: pr[0], w: it.weight || 0, b: { __src: pr[1] },
+                 cf: new Set(it.conflictingItems || []),
+                 cids: db.conflictUniverse.has(iid) ? new Set([iid]) : new Set() }];
+    if (stack.has(iid)) return acc;                 // cycle guard: bare item
+    const st = new Set(stack); st.add(iid);
+    for (const slot of p.slots || []) {
+      const so = slotOptions((slot.filters || {}).allowedItems || [], slot.required, st);
+      if (slot.required && !so.length) return [];
+      acc = merge(acc, slot.nameId || slot.id || "?", so, BEAM_MOD);
+      if (!acc.length) return [];
+    }
+    if (!stack.has(iid)) memo.set(iid, acc);
+    return acc;
+  }
+
+  const gp = db.props(gunId);
+  const gun = db.items[gunId];
+  const gpr = priceOf(db, gunId, fleaOnly, maxLL) || [0, "unpriced"];
+  let acc = [{ e: 0, r: 0, c: gpr[0], w: gun.weight || 0, b: { __src: gpr[1] },
+               cf: new Set(gun.conflictingItems || []), cids: new Set() }];
+  const slots = gp.slots || [];
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    postMessage({ type: "progress", msg: `solving ${slot.nameId} (${i + 1}/${slots.length})…` });
+    const so = slotOptions((slot.filters || {}).allowedItems || [], slot.required, new Set([gunId]));
+    if (slot.required && !so.length)
+      return { error: `required slot ${slot.nameId} has no buyable parts under filters` };
+    acc = merge(acc, slot.nameId || "?", so, BEAM_ROOT);
+    if (!acc.length) return { error: "no feasible build under constraints" };
+  }
+
+  const baseE = gp.ergonomics || 0, baseV = gp.recoilVertical || 0, baseH = gp.recoilHorizontal || 0;
+  function renderTree(b) {
+    const out = [];
+    for (const [k, v] of Object.entries(b)) {
+      if (k === "__src") continue;
+      const [cid, cb] = v;
+      const p = db.props(cid);
+      out.push({ slot: k, name: db.name(cid), src: cb.__src || "?",
+                 e: p.ergonomics || 0, r: p.recoilModifier || 0,
+                 children: renderTree(cb) });
+    }
+    return out;
+  }
+  const points = acc.map(o => ({
+    ergo: Math.round(baseE + o.e), rv: Math.round(baseV * (1 + o.r)),
+    rh: Math.round(baseH * (1 + o.r)), w: +o.w.toFixed(2), c: o.c,
+    src: o.b.__src, tree: renderTree(o.b),
+  })).sort((a, b) => a.c - b.c);
+  return { points, gunName: db.name(gunId), excluded: excludedSet.size };
+}
+
+onmessage = async ev => {
+  const m = ev.data;
+  try {
+    const db = await loadDB(m.mode);
+    if (m.type === "boot") {
+      const weapons = Object.values(db.items)
+        .filter(i => (i.properties || {}).propertiesType === "ItemPropertiesWeapon")
+        .map(i => ({ id: i.id, name: db.name(i.id) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const v = validate(db);
+      postMessage({ type: "boot", weapons, validate: v });
+    } else if (m.type === "frontier") {
+      const t0 = performance.now();
+      const res = frontier(db, m.gunId, m);
+      res.ms = Math.round(performance.now() - t0);
+      postMessage(Object.assign({ type: "frontier" }, res));
+    }
+  } catch (e) {
+    postMessage({ type: "error", msg: String(e) });
+  }
+};
+</script>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const fmt = n => Math.round(n).toLocaleString("en-US");
+const STATS = { rv: ["vertical recoil", p => p.rv, true], rh: ["horizontal recoil", p => p.rh, true],
+                ergo: ["ergonomics", p => p.ergo, false], w: ["weight kg", p => p.w, true] };
+let worker = null, points = [], selected = null, bootedMode = null;
+
+function setStatus(html) { $("status").innerHTML = html; }
+function overlay(msg) {
+  $("overlay").style.display = msg ? "flex" : "none";
+  if (msg) $("overlaymsg").textContent = msg;
+}
+
+function bootWorker() {
+  if (worker) worker.terminate();
+  const code = document.getElementById("workercode").textContent;
+  worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  worker.onmessage = ev => {
+    const m = ev.data;
+    if (m.type === "progress") { $("overlaymsg").textContent = m.msg; return; }
+    if (m.type === "error") { overlay(null); setStatus(`<span class="err">${m.msg}</span>`); return; }
+    if (m.type === "boot") {
+      const sel = $("gun");
+      sel.innerHTML = "";
+      for (const w of m.weapons) {
+        const o = document.createElement("option");
+        o.value = w.id; o.textContent = w.name;
+        sel.appendChild(o);
+      }
+      sel.value = "5447a9cd4bdc2dbd208b4567";           // Colt M4A1
+      if (!sel.value) sel.selectedIndex = 0;
+      const v = m.validate;
+      setStatus(`stat model self-test vs in-game presets: ` +
+        `<span class="${v.passed === v.total ? "ok" : "err"}">${v.passed}/${v.total} exact</span>` +
+        ` · pick a gun and COMPUTE`);
+      overlay(null);
+      return;
+    }
+    if (m.type === "frontier") {
+      overlay(null);
+      if (m.error) { setStatus(`<span class="err">${m.error}</span>`); return; }
+      points = m.points; selected = null;
+      setStatus(`${m.gunName}: <span class="ok">${points.length} non-dominated builds</span> ` +
+        `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable under filters · click the chart`);
+      drawChart();
+      $("totals").textContent = "click a point on the chart";
+      $("tree").innerHTML = "";
+    }
+  };
+  worker.postMessage({ type: "boot", mode: $("mode").value });
+}
+
+function compute() {
+  overlay("crunching the build space…");
+  worker.postMessage({
+    type: "frontier", mode: $("mode").value, gunId: $("gun").value,
+    fleaOnly: $("fleaOnly").checked, maxLL: +$("maxLL").value,
+    budget: +$("budget").value || null,
+  });
+}
+
+function drawChart() {
+  const svg = $("chart");
+  svg.innerHTML = "";
+  if (!points.length) return;
+  const [label, val, lowerBetter] = STATS[$("stat").value];
+  $("chartlabel").textContent = label;
+  const W = 720, H = 480, L = 62, R = 16, T = 14, B = 40;
+  const xs = points.map(p => p.c), ys = points.map(val);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const xpad = (xmax - xmin) * 0.04 || 1, ypad = (ymax - ymin) * 0.06 || 1;
+  const X = c => L + (c - xmin + xpad) / (xmax - xmin + 2 * xpad) * (W - L - R);
+  const Y = v => T + (1 - (v - ymin + ypad) / (ymax - ymin + 2 * ypad)) * (H - T - B);
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (t, attrs) => { const e = document.createElementNS(NS, t);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+  // axes + ticks
+  const ax = el("g", { class: "axis" });
+  ax.appendChild(el("line", { x1: L, y1: H - B, x2: W - R, y2: H - B }));
+  ax.appendChild(el("line", { x1: L, y1: T, x2: L, y2: H - B }));
+  for (let i = 0; i <= 6; i++) {
+    const cv = xmin + (xmax - xmin) * i / 6;
+    const t = el("text", { x: X(cv), y: H - B + 16, "text-anchor": "middle" });
+    t.textContent = cv >= 1e6 ? (cv / 1e6).toFixed(1) + "M" : Math.round(cv / 1000) + "k";
+    ax.appendChild(t);
+    const yv = ymin + (ymax - ymin) * i / 6;
+    const t2 = el("text", { x: L - 8, y: Y(yv) + 3, "text-anchor": "end" });
+    t2.textContent = Math.round(yv * 100) / 100;
+    ax.appendChild(t2);
+  }
+  const xl = el("text", { x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle" });
+  xl.textContent = "build cost, RUB";
+  ax.appendChild(xl);
+  svg.appendChild(ax);
+  // envelope: best stat at <= cost (points sorted by cost)
+  let best = null;
+  const envIdx = new Set();
+  const path = [];
+  points.forEach((p, i) => {
+    const v = val(p);
+    if (best === null || (lowerBetter ? v < best : v > best)) {
+      best = v; envIdx.add(i);
+      path.push(`${path.length ? "L" : "M"}${X(p.c)},${Y(v)}`);
+    } else {
+      path.push(`L${X(p.c)},${Y(best)}`);
+    }
+  });
+  svg.appendChild(el("path", { class: "envline", d: path.join(" ") }));
+  // points
+  points.forEach((p, i) => {
+    const c = el("circle", { class: "pt" + (envIdx.has(i) ? " env" : "") + (selected === i ? " sel" : ""),
+      cx: X(p.c), cy: Y(val(p)), r: envIdx.has(i) ? 4 : 2.6, "data-i": i });
+    c.addEventListener("click", () => selectPoint(i));
+    c.addEventListener("mousemove", ev => {
+      const tip = $("tip");
+      tip.style.display = "block";
+      tip.style.left = (ev.clientX + 14) + "px";
+      tip.style.top = (ev.clientY + 10) + "px";
+      tip.textContent = `cost ${fmt(p.c)} ₽\nergo ${p.ergo}  recoil ${p.rv}/${p.rh}\nweight ${p.w} kg`;
+    });
+    c.addEventListener("mouseleave", () => $("tip").style.display = "none");
+    svg.appendChild(c);
+  });
+}
+
+function selectPoint(i) {
+  selected = i;
+  drawChart();
+  const p = points[i];
+  $("totals").innerHTML =
+    `ergonomics <b>${p.ergo}</b> · recoil V <b>${p.rv}</b> / H <b>${p.rh}</b><br>` +
+    `weight ${p.w} kg · total cost <b>${fmt(p.c)} ₽</b> · gun via ${p.src}`;
+  $("tree").innerHTML = "";
+  $("tree").appendChild(renderTree(p.tree));
+}
+
+function renderTree(nodes) {
+  const ul = document.createElement("ul");
+  ul.className = "tree";
+  for (const n of nodes) {
+    const li = document.createElement("li");
+    const stats = [
+      n.e ? `<span class="${n.e > 0 ? "stat-good" : "stat-bad"}">ergo${n.e > 0 ? "+" : ""}${n.e}</span>` : "",
+      n.r ? `<span class="${n.r < 0 ? "stat-good" : "stat-bad"}">rec${(n.r * 100).toFixed(0)}%</span>` : "",
+    ].filter(Boolean).join(" ");
+    li.innerHTML = `<span class="slotname">${n.slot.replace(/^mod_/, "")}:</span> ` +
+      `${n.name} <span class="src">[${n.src}]</span> ${stats}`;
+    if (n.children.length) li.appendChild(renderTree(n.children));
+    ul.appendChild(li);
+  }
+  return ul;
+}
+
+$("run").addEventListener("click", compute);
+$("stat").addEventListener("change", drawChart);
+$("mode").addEventListener("change", () => { overlay("switching economy…"); bootWorker(); });
+
+overlay("loading item data…");
+bootWorker();
+</script>
+</body>
+</html>
