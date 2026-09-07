@@ -52,6 +52,12 @@
   #tip { position: fixed; pointer-events: none; background: #000d; color: var(--text);
          border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px;
          font: 11px var(--mono); display: none; z-index: 10; white-space: pre; }
+  #explain { font: 12px var(--mono); color: var(--dim); background: #201f1c;
+             border-left: 3px solid var(--gold); border-radius: 3px;
+             padding: 7px 10px; margin: 0 0 10px; line-height: 1.6; }
+  #explain:empty { display: none; }
+  #explain b { color: var(--text); font-weight: 600; }
+  #explain .gate { color: var(--gold); cursor: pointer; border-bottom: 1px dotted var(--gold); }
   #totals { font: 13px var(--mono); background: var(--panel2); border-radius: 5px;
             padding: 10px 12px; margin-bottom: 10px; line-height: 1.7; }
   #totals b { color: var(--gold); }
@@ -112,6 +118,7 @@
   <section id="chartbox">
     <h2>Efficient frontier — cost to reach <span id="chartlabel">vertical recoil</span>
       <small id="shown" style="margin-left:10px"></small></h2>
+    <div id="explain"></div>
     <svg id="chart" width="100%" height="480" viewBox="0 0 720 480" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="hint">Every dot is a non-dominated build; the gold staircase is the cheapest build
       reaching each stat level — better is always rightward. Where the staircase goes vertical,
@@ -474,6 +481,73 @@ function compute() {
   });
 }
 
+const SLOT_LABEL = {
+  mod_reciever: "receiver", mod_handguard: "handguard", mod_stock: "stock",
+  mod_barrel: "barrel", mod_muzzle: "muzzle", mod_pistol_grip: "grip",
+  mod_magazine: "magazine", mod_gas_block: "gas block", mod_scope: "scope",
+  mod_foregrip: "foregrip", mod_charge: "charging handle", mod_mount: "mount",
+  mod_sight_front: "front sight", mod_sight_rear: "rear sight", mod_tactical: "tactical",
+};
+const slotLabel = s => SLOT_LABEL[s] || s.replace(/^mod_/, "").replace(/_/g, " ");
+
+// Find the dominant cost gap in the visible builds and name the slot(s) whose
+// part choice separates the bands. Automates "why is this clustered?".
+function explainClusters(idx) {
+  const box = $("explain");
+  box.innerHTML = "";
+  if (idx.length < 20) return;
+  const byCost = [...idx].sort((a, b) => points[a].c - points[b].c);
+  const lo = points[byCost[0]].c, hi = points[byCost[byCost.length - 1]].c;
+  const span = hi - lo;
+  if (span <= 0) return;
+  // biggest gap, requiring both sides to hold a real share of the builds
+  let bestGap = 0, bestK = -1;
+  for (let k = 1; k < byCost.length; k++) {
+    const gap = points[byCost[k]].c - points[byCost[k - 1]].c;
+    const share = Math.min(k, byCost.length - k) / byCost.length;
+    if (gap > bestGap && share >= 0.05) { bestGap = gap; bestK = k; }
+  }
+  if (bestK < 0 || bestGap < span * 0.15) return;   // no distinct bands
+  const bandA = byCost.slice(0, bestK), bandB = byCost.slice(bestK);
+  // which slots separate the two bands with no shared part?
+  const slotKeys = new Set();
+  idx.forEach(i => Object.keys(points[i].slots).forEach(s => slotKeys.add(s)));
+  const perfect = [];
+  for (const s of slotKeys) {
+    const setA = new Set(bandA.map(i => points[i].slots[s] || "(none)"));
+    const setB = new Set(bandB.map(i => points[i].slots[s] || "(none)"));
+    if (!setA.size || !setB.size) continue;
+    const shared = [...setA].filter(x => setB.has(x)).length;
+    if (shared === 0) perfect.push({ s, a: setA.size, b: setB.size });
+  }
+  perfect.sort((x, y) => (x.a + x.b) - (y.a + y.b));
+  const jump = points[bandB[0]].c - points[bandA[bandA.length - 1]].c;
+  let html = `<b>Two cost bands.</b> ${bandA.length} builds around ` +
+    `${fmt(points[bandA[0]].c)}–${fmt(points[bandA[bandA.length - 1]].c)} ₽, then a ` +
+    `<b>${fmt(jump)} ₽ jump</b> to ${bandB.length} builds from ${fmt(points[bandB[0]].c)} ₽. `;
+  if (perfect.length) {
+    const named = perfect.slice(0, 3).map(p =>
+      `<span class="gate" data-slot="${p.s}">${slotLabel(p.s)}</span>` +
+      ` (${p.a}→${p.b} parts)`).join(", ");
+    html += `Nothing crosses the gap in: ${named} — that swap is the gate. ` +
+      `<i>Click one to colour the chart by it.</i>`;
+  } else {
+    html += `No single slot separates the bands cleanly — the jump comes from ` +
+      `several parts together.`;
+  }
+  box.innerHTML = html;
+  box.querySelectorAll(".gate").forEach(sp => sp.addEventListener("click", () => {
+    const slot = sp.dataset.slot;
+    if (![...$("colorBy").options].some(o => o.value === slot)) {
+      const o = document.createElement("option");
+      o.value = slot; o.textContent = slotLabel(slot);
+      $("colorBy").appendChild(o);
+    }
+    $("colorBy").value = slot;
+    drawChart();
+  }));
+}
+
 function drawChart() {
   const svg = $("chart");
   svg.innerHTML = "";
@@ -498,8 +572,10 @@ function drawChart() {
     msg.setAttribute("text-anchor", "middle");
     msg.textContent = `no builds cost at least ${fmt(floor)} ₽ — lower the floor`;
     svg.appendChild(msg);
+    $("explain").innerHTML = "";
     return;
   }
+  explainClusters(order);
   const gs = order.map(i => good(points[i]));
   // skyline: walk best-stat-first, keep a point only when it's cheaper than
   // every better-stat build seen so far. That minimal staircase is the frontier.
