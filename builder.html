@@ -94,7 +94,8 @@
       <option value="mod_pistol_grip">grip</option>
     </select>
   </label>
-  <label class="ctl">budget ₽ <input id="budget" type="number" value="600000" step="50000"></label>
+  <label class="ctl" title="Only show builds costing at least this much — a spend floor, applied to the computed frontier">min ₽ <input id="floor" type="number" value="0" step="50000"></label>
+  <label class="ctl" title="Hard ceiling used during the search">max ₽ <input id="budget" type="number" value="600000" step="50000"></label>
   <label class="ctl"><input id="fleaOnly" type="checkbox"> flea only</label>
   <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
   <label class="ctl">max LL
@@ -109,7 +110,8 @@
 
 <main>
   <section id="chartbox">
-    <h2>Efficient frontier — cost to reach <span id="chartlabel">vertical recoil</span></h2>
+    <h2>Efficient frontier — cost to reach <span id="chartlabel">vertical recoil</span>
+      <small id="shown" style="margin-left:10px"></small></h2>
     <svg id="chart" width="100%" height="480" viewBox="0 0 720 480" preserveAspectRatio="xMidYMid meet"></svg>
     <div class="hint">Every dot is a non-dominated build; the gold staircase is the cheapest build
       reaching each stat level — better is always rightward. Where the staircase goes vertical,
@@ -481,7 +483,23 @@ function drawChart() {
   const W = 720, H = 480, L = 74, R = 16, T = 14, B = 44;
   // X = stat, oriented so better is always rightward; Y = rubles
   const good = p => lowerBetter ? -val(p) : val(p);
-  const order = points.map((_, i) => i).sort((a, b) => good(points[a]) - good(points[b]));
+  // spend floor is a view filter, not a search constraint: the DP builds up
+  // through cheap partial builds, so a minimum cost can only be applied to
+  // finished builds. Skyline recomputes over whatever survives the filter.
+  const floor = +$("floor").value || 0;
+  const order = points.map((_, i) => i).filter(i => points[i].c >= floor)
+    .sort((a, b) => good(points[a]) - good(points[b]));
+  $("shown").textContent = floor > 0
+    ? `${order.length} of ${points.length} builds ≥ ${fmt(floor)} ₽` : "";
+  if (!order.length) {
+    const NS2 = "http://www.w3.org/2000/svg";
+    const msg = document.createElementNS(NS2, "text");
+    msg.setAttribute("x", 360); msg.setAttribute("y", 240);
+    msg.setAttribute("text-anchor", "middle");
+    msg.textContent = `no builds cost at least ${fmt(floor)} ₽ — lower the floor`;
+    svg.appendChild(msg);
+    return;
+  }
   const gs = order.map(i => good(points[i]));
   // skyline: walk best-stat-first, keep a point only when it's cheaper than
   // every better-stat build seen so far. That minimal staircase is the frontier.
@@ -492,7 +510,7 @@ function drawChart() {
     if (c < runMin) { envIdx.add(order[k]); runMin = c; }
   }
   const gmin = gs[0], gmax = gs[gs.length - 1];
-  const cs = points.map(p => p.c);
+  const cs = order.map(i => points[i].c);
   const cmin = Math.min(...cs), cmax = Math.max(...cs);
   const gpad = (gmax - gmin) * 0.04 || 1, cpad = (cmax - cmin) * 0.06 || 1;
   const X = g => L + (g - gmin + gpad) / (gmax - gmin + 2 * gpad) * (W - L - R);
@@ -527,9 +545,18 @@ function drawChart() {
     svg.appendChild(el("line", { x1: L, y1: Y(budget), x2: W - R, y2: Y(budget),
       stroke: "#7fb069", "stroke-dasharray": "5 5", opacity: ".5" }));
     const bt = el("text", { x: W - R - 4, y: Y(budget) - 5, "text-anchor": "end" });
-    bt.textContent = "budget";
+    bt.textContent = "max";
     bt.style.fill = "#7fb069";
     svg.appendChild(bt);
+  }
+  // spend floor line
+  if (floor > 0 && floor >= cmin - cpad && floor <= cmax + cpad) {
+    svg.appendChild(el("line", { x1: L, y1: Y(floor), x2: W - R, y2: Y(floor),
+      stroke: "#b06969", "stroke-dasharray": "3 6", opacity: ".45" }));
+    const ft = el("text", { x: W - R - 4, y: Y(floor) + 11, "text-anchor": "end" });
+    ft.textContent = "min";
+    ft.style.fill = "#b06969";
+    svg.appendChild(ft);
   }
   // envelope staircase through the skyline corners, ascending stat
   const sky = order.filter(i => envIdx.has(i)).sort((a, b) => good(points[a]) - good(points[b]));
@@ -548,7 +575,7 @@ function drawChart() {
   if (colorBy) {
     const label = p => p.slots[colorBy] || "(none)";
     const counts = {};
-    points.forEach(p => counts[label(p)] = (counts[label(p)] || 0) + 1);
+    order.forEach(i => counts[label(points[i])] = (counts[label(points[i])] || 0) + 1);
     const ranked = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
     const top = ranked.slice(0, PALETTE.length - 1);
     const colorOf = {};
@@ -579,8 +606,9 @@ function drawChart() {
     });
     svg.appendChild(legend);
   }
-  // points
-  points.forEach((p, i) => {
+  // points (filtered view only)
+  order.forEach(i => {
+    const p = points[i];
     const c = el("circle", { class: "pt" + (!colorBy && envIdx.has(i) ? " env" : "") + (selected === i ? " sel" : ""),
       cx: X(good(p)), cy: Y(p.c), r: envIdx.has(i) ? 4 : 2.6, "data-i": i });
     if (colorFor) c.style.fill = colorFor(p);
@@ -629,6 +657,7 @@ $("run").addEventListener("click", compute);
 $("usableMag").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
+$("floor").addEventListener("input", () => { if (points.length) drawChart(); });
 $("mode").addEventListener("change", () => { overlay("switching economy…"); bootWorker(); });
 
 overlay("loading item data…");
