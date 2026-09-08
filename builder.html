@@ -311,8 +311,8 @@ function priceOf(db, iid, source, traderLL, freshDurable) {
   let best = null;
   const forceTrader = freshDurable && hasDurability(db, iid);
   const noFlea = (it.types || []).some(t => t.toLowerCase() === "noflea");
-  if (!forceTrader && source !== "trader" && it.lastLowPrice && !noFlea)
-    best = [it.lastLowPrice, "Flea"];
+  const fleaOK = it.lastLowPrice && !noFlea && source !== "trader";
+  if (!forceTrader && fleaOK) best = [it.lastLowPrice, "Flea"];
   if (forceTrader || source !== "flea") {
     for (const o of it.buyFromTrader || []) {
       if (o.taskUnlock) continue;
@@ -322,6 +322,12 @@ function priceOf(db, iid, source, traderLL, freshDurable) {
         best = [o.priceRUB, `${db.traderName[o.trader] ?? "trader"} L${o.minTraderLevel}`];
     }
   }
+  // 100/100 was wanted but no trader in the data stocks this item. That is
+  // usually an upstream gap rather than reality: buyFromTrader gun assortments
+  // are severely incomplete (89% of weapons carry no trader offer at all, and
+  // Peacekeeper none — the-hideout/tarkov-api#481). Fall back to flea and mark
+  // the source rather than declaring a buildable gun unbuildable.
+  if (!best && forceTrader && fleaOK) best = [it.lastLowPrice, "Flea — condition unverified"];
   return best;
 }
 
@@ -559,6 +565,7 @@ function frontier(db, gunId, opts) {
     src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}, 0),
   })).sort((a, b) => a.c - b.c);
   return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap,
+    conditionUnverified: /condition unverified/.test(gpr[1]),
     weapon: { angle: gp.recoilAngle ?? 90, dispersion: gp.recoilDispersion ?? 10,
               baseRv: baseV, baseRh: baseH } };
 }
@@ -680,7 +687,10 @@ function bootWorker() {
       refreshColorBy();
       setStatus(`${m.gunName}: <span class="ok">${points.length} non-dominated builds</span> ` +
         `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable` +
-        `${m.minMagCap ? ` · mag ≥ ${m.minMagCap}` : ""} · click the chart`);
+        `${m.minMagCap ? ` · mag ≥ ${m.minMagCap}` : ""}` +
+        (m.conditionUnverified ? ` · <span class="err">no trader stocks this receiver ` +
+          `in the data (upstream gap) — priced from flea, condition unverified</span>` : "") +
+        ` · click the chart`);
       drawChart();
       drawPattern(null);                     // stock pattern until a build is picked
       $("totals").textContent = "click a point on the chart";
