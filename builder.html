@@ -127,12 +127,13 @@
       to inspect that exact build. Frontier is beam-search approximate; prices are live (~5 min).
       Vertical and horizontal recoil scale by the same multiplier on every weapon (verified against
       all 393 in-game presets), so one recoil number ranks both — the diagram beside the selected
-      build shows the direction your build can't change.</div>
+      build shows the direction your build can't change. Note "horizontal" is the backward force
+      into the shoulder, not left-right sway, so it is shown as a bar rather than as screen width.</div>
   </section>
   <section id="buildbox">
     <h2>Selected build</h2>
     <div class="patrow">
-      <svg id="pattern" width="150" height="150" viewBox="0 0 160 160"></svg>
+      <svg id="pattern" width="150" height="180" viewBox="0 0 160 192"></svg>
       <div id="totals">click a point on the chart</div>
     </div>
     <div id="tree"></div>
@@ -561,10 +562,21 @@ function explainClusters(idx) {
   }));
 }
 
-// Recoil pattern: direction from the weapon's recoilAngle (90 deg = straight
-// up), spread from recoilDispersion, envelope aspect from the base rh/rv
-// ratio. All three are weapon-level and unmodifiable — only the LENGTH
-// responds to the build, scaled by its recoil multiplier.
+// Recoil pattern, drawn from the shooter's view. The grid + vector + cone show
+// only what is genuinely in the view plane: direction from recoilAngle
+// (90 deg = straight up) and spread from recoilDispersion.
+//
+// recoilVertical and recoilHorizontal are NOT two components of that vector.
+// They map to the game's RecoilForceUp / RecoilForceBack: "horizontal" is the
+// BACKWARD impulse into the shoulder, on the depth axis, not left-right on
+// screen. Proof it isn't in-plane: atan2(rv, rh) matches recoilAngle on 0 of
+// 171 weapons, the highest-"horizontal" guns are bolt-action rifles that
+// cannot spray sideways, and the flattest-shooting SMGs have the highest
+// rh/rv ratios. So they are shown as two magnitude bars, never as a shape.
+// All of angle/dispersion/base forces are weapon-level and unmodifiable; only
+// the magnitudes scale, by the build's recoil multiplier.
+const RV_MAX = 700, RH_MAX = 1250;      // game-wide ranges, for bar scaling
+
 function drawPattern(rmul) {
   const svg = $("pattern");
   svg.innerHTML = "";
@@ -573,11 +585,16 @@ function drawPattern(rmul) {
   const NS = "http://www.w3.org/2000/svg";
   const el = (t, a) => { const e = document.createElementNS(NS, t);
     for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; };
-  const cx = 80, cy = 84, R = 60;
+  const txt = (x, y, s, size, fill, anchor) => {
+    const t = el("text", { x, y, "text-anchor": anchor || "start" });
+    t.textContent = s; t.style.fontSize = size + "px"; t.style.fill = fill;
+    svg.appendChild(t); return t;
+  };
+  const cx = 80, cy = 74, R = 50;
   const m = Math.max(0, Math.min(1.2, rmul == null ? 1 : rmul));
   // grid
   const grid = el("g", { stroke: "#33312c", "stroke-width": ".5", opacity: ".7" });
-  for (let p = cx - R; p <= cx + R + 1; p += R / 3) {
+  for (let p = cx - R; p <= cx + R + 1; p += R / 2.5) {
     grid.appendChild(el("line", { x1: p, y1: cy - R, x2: p, y2: cy + R }));
     grid.appendChild(el("line", { x1: cx - R, y1: p - cx + cy, x2: cx + R, y2: p - cx + cy }));
   }
@@ -586,13 +603,8 @@ function drawPattern(rmul) {
     stroke: "#4a4740", "stroke-width": "1" }));
   svg.appendChild(el("line", { x1: cx, y1: cy - R, x2: cx, y2: cy + R,
     stroke: "#4a4740", "stroke-width": "1" }));
-  // kick envelope: aspect from rh/rv, scaled by the build multiplier
-  const mx = Math.max(baseRv, baseRh) || 1;
-  svg.appendChild(el("ellipse", { cx, cy, rx: R * 0.92 * (baseRh / mx) * m,
-    ry: R * 0.92 * (baseRv / mx) * m, fill: "none", stroke: "#6f6754",
-    "stroke-dasharray": "3 4", opacity: ".8" }));
   // dispersion cone around the kick direction
-  const len = R * 0.92 * m;
+  const len = R * 0.94 * m;
   const half = Math.max(4, Math.min(34, dispersion * 0.8));
   const pt = a => [cx + Math.cos(a * Math.PI / 180) * len,
                    cy - Math.sin(a * Math.PI / 180) * len];
@@ -608,15 +620,19 @@ function drawPattern(rmul) {
   svg.appendChild(el("polygon", { fill: "#c6a55d", points:
     `${ax},${ay} ${ax + Math.cos(a1) * head},${ay - Math.sin(a1) * head} ` +
     `${ax + Math.cos(a2) * head},${ay - Math.sin(a2) * head}` }));
-  // labels
-  const cap = el("text", { x: cx, y: 14, "text-anchor": "middle" });
-  cap.textContent = `${angle}° · disp ${dispersion}`;
-  cap.style.fontSize = "10px"; cap.style.fill = "#8b877c";
-  svg.appendChild(cap);
-  const sub = el("text", { x: cx, y: 156, "text-anchor": "middle" });
-  sub.textContent = rmul == null ? "stock recoil" : `${Math.round(m * 100)}% of stock`;
-  sub.style.fontSize = "10px"; sub.style.fill = "#8b877c";
-  svg.appendChild(sub);
+  txt(cx, 13, `${angle}° kick · disp ${dispersion}`, 9, "#8b877c", "middle");
+  txt(cx, cy + R + 13, rmul == null ? "stock recoil" : `${Math.round(m * 100)}% of stock`,
+      9, "#8b877c", "middle");
+  // force magnitudes as bars — different axes, so never drawn as one shape
+  const bar = (y, label, frac, val) => {
+    txt(4, y + 7, label, 8, "#8b877c");
+    svg.appendChild(el("rect", { x: 30, y, width: 96, height: 7, fill: "#2a2925", rx: 2 }));
+    svg.appendChild(el("rect", { x: 30, y, width: Math.max(2, 96 * frac), height: 7,
+      fill: "#c6a55d", opacity: ".75", rx: 2 }));
+    txt(130, y + 7, String(Math.round(val)), 8, "#8b877c");
+  };
+  bar(cy + R + 24, "up", Math.min(1, baseRv * m / RV_MAX), baseRv * m);
+  bar(cy + R + 38, "back", Math.min(1, baseRh * m / RH_MAX), baseRh * m);
 }
 
 function drawChart() {
