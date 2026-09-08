@@ -126,7 +126,6 @@
     <select id="stat">
       <option value="recoil" selected>recoil</option>
       <option value="ergo">ergonomics</option>
-      <option value="w">weight</option>
     </select>
   </label>
   <label class="ctl" title="Populated from the slots this weapon actually has; the number is how many different parts the builds use in that slot">color by
@@ -434,18 +433,21 @@ function frontier(db, gunId, opts) {
   // finds a legal 73 for ~74k and a continuous frontier through the whole
   // range. Grid stratification cannot lose the middle, because every occupied
   // cell survives by construction.
+  // Grid is (recoil, ergo) only. Weight was a third dimension, but nobody
+  // builds for weight — carrying it just spent beam budget preserving builds
+  // that differ in nothing anyone optimises for, when the cheaper of two
+  // equal-recoil equal-ergo builds is simply the better one.
   function prune(arr, beam) {
-    let rq = 0.004, eq = 1, wq = 0.25;      // recoil 0.4%, ergo 1pt, weight 250g
+    let rq = 0.004, eq = 1;                 // recoil 0.4%, ergo 1 point
     for (let pass = 0; pass < 12; pass++) {
       const best = new Map();
       for (const o of arr) {
-        const k = Math.round(o.r / rq) + "|" + Math.round(o.e / eq) + "|" +
-                  Math.round(o.w / wq);
+        const k = Math.round(o.r / rq) + "|" + Math.round(o.e / eq);
         const cur = best.get(k);
         if (cur === undefined || o.c < cur.c) best.set(k, o);
       }
       if (best.size <= beam || pass === 11) return [...best.values()];
-      rq *= 1.7; eq *= 1.7; wq *= 1.7;      // coarsen until it fits
+      rq *= 1.7; eq *= 1.7;                 // coarsen until it fits
     }
   }
 
@@ -678,7 +680,7 @@ const fmt = n => Math.round(n).toLocaleString("en-US");
 // would rank every build the same and only change the tick values — vertical is
 // used because it is the figure on the in-game weapon screen.
 const STATS = { recoil: ["vertical recoil", p => p.rvExact, true],
-                ergo: ["ergonomics", p => p.ergo, false], w: ["weight kg", p => p.w, true] };
+                ergo: ["ergonomics", p => p.ergo, false] };
 let worker = null, points = [], selected = null, bootedMode = null, weaponInfo = null;
 let traderList = [];
 
