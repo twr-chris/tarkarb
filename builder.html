@@ -153,9 +153,11 @@
       reaching each stat level — better is always rightward. Where the staircase goes vertical,
       rubles stop buying stat: that's your knee. Dashed green line is your budget. Click any dot
       to inspect that exact build. Frontier is beam-search approximate; prices are live (~5 min).
-      Vertical and horizontal recoil scale by the same multiplier on every weapon (verified against
-      all 393 in-game presets), so one recoil number ranks both — the diagram beside the selected
-      build shows the direction your build can't change. Tarkov's "horizontal" recoil is the
+      The recoil axis plots the <b>vertical</b> figure — the one on your in-game weapon screen —
+      because vertical and horizontal scale by the same multiplier on every weapon (verified
+      against all 393 in-game presets). Plotting horizontal instead would rank every build
+      identically and only change the tick values. The diagram beside the selected build shows
+      the kick direction your build can't change. Tarkov's "horizontal" recoil is the
       forward/back axis — the shove into your shoulder — not left-right sway, so it appears as its
       own bar rather than as screen width. Lateral wander comes from the recoil angle plus
       dispersion randomising it shot to shot, which is what the cone shows.</div>
@@ -534,7 +536,11 @@ onmessage = async ev => {
 "use strict";
 const $ = id => document.getElementById(id);
 const fmt = n => Math.round(n).toLocaleString("en-US");
-const STATS = { recoil: ["recoil", p => p.rvExact, true],
+// "recoil" plots the VERTICAL number (base recoilVertical x the build's
+// multiplier, unrounded). Horizontal scales by the identical multiplier, so it
+// would rank every build the same and only change the tick values — vertical is
+// used because it is the figure on the in-game weapon screen.
+const STATS = { recoil: ["vertical recoil", p => p.rvExact, true],
                 ergo: ["ergonomics", p => p.ergo, false], w: ["weight kg", p => p.w, true] };
 let worker = null, points = [], selected = null, bootedMode = null, weaponInfo = null;
 
