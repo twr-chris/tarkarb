@@ -339,22 +339,26 @@ def optimize(db: DB, gun_id: str, goal: str, budget: int | None,
         return ids
 
     def prune(opts):
-        # quantized Pareto prune, then goal-aware beam cap
-        best = {}
-        for o in opts:
-            key = (round(o[0] / Q_ERGO), round(o[1] / Q_REC),
-                   round(o[2] / Q_COST), round(o[3] / Q_WT))
-            cur = best.get(key)
-            if cur is None or score(o[:4]) > score(cur[:4]):
-                best[key] = o
-        opts = list(best.values())
-        keep = []
-        for o in sorted(opts, key=lambda o: score(o[:4]), reverse=True):
-            if not any(dominates(k, o) for k in keep[:80]):
-                keep.append(o)
-            if len(keep) >= BEAM:
-                break
-        return keep
+        """Stratify across the (ergo, recoil, weight) grid, keeping the cheapest
+        build per cell, coarsening until it fits the beam.
+
+        Selecting survivors by a scalar score (or by best-ergo / best-recoil /
+        cheapest thirds) preserves the CORNERS of the trade-off surface and
+        discards its middle, which fabricates gaps in the cost-vs-stat frontier.
+        Grid stratification cannot lose the middle: every occupied cell lives.
+        """
+        eq, rq, wq = Q_ERGO, Q_REC, Q_WT
+        for _ in range(12):
+            best = {}
+            for o in opts:
+                key = (round(o[0] / eq), round(o[1] / rq), round(o[3] / wq))
+                cur = best.get(key)
+                if cur is None or o[2] < cur[2]:      # cheapest wins the cell
+                    best[key] = o
+            if len(best) <= BEAM:
+                return list(best.values())
+            eq, rq, wq = eq * 1.7, rq * 1.7, wq * 1.7
+        return list(best.values())
 
     def dominates(a, b):
         return (a[0] >= b[0] and a[1] <= b[1] and a[2] <= b[2] and a[3] <= b[3]

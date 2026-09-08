@@ -319,7 +319,7 @@ function validate(db) {
 // merge keeps light numeric records in the hot loop and materializes build
 // trees only for prune survivors; each slot's candidate list is pre-pruned;
 // mod subtrees use a narrower beam than the root frontier.
-const BEAM_MOD = 160, BEAM_ROOT = 700, SLOT_CAP = 150;
+const BEAM_MOD = 400, BEAM_ROOT = 2000, SLOT_CAP = 300;
 
 function defaultMagCap(db, gunId) {
   const dp = db.props(gunId).defaultPreset;
@@ -347,28 +347,29 @@ function frontier(db, gunId, opts) {
     return (p.capacity || 0) >= minMagCap;
   };
 
-  const qkey = o => `${Math.round(o.e)}|${Math.round(o.r / 0.005)}|${Math.round(o.c / 2500)}|${Math.round(o.w / 0.1)}`;
-  const balanced = o => o.e - 250 * o.r - o.c / 100000;
-
+  // Stratify survivors across the (recoil, ergo, weight) grid, keeping the
+  // CHEAPEST build in each cell.
+  //
+  // The previous beam kept three thirds — best-ergo, best-recoil, cheapest —
+  // which preserves the CORNERS of the trade-off surface and throws away its
+  // middle. That fabricated huge gaps: it reported no M4 between 99 and 73
+  // recoil and priced recoil 73 at ~270k, when a conflict-checked exact DP
+  // finds a legal 73 for ~74k and a continuous frontier through the whole
+  // range. Grid stratification cannot lose the middle, because every occupied
+  // cell survives by construction.
   function prune(arr, beam) {
-    const best = new Map();
-    for (const o of arr) {
-      const k = qkey(o);
-      const cur = best.get(k);
-      if (!cur || balanced(o) > balanced(cur)) best.set(k, o);
+    let rq = 0.004, eq = 1, wq = 0.25;      // recoil 0.4%, ergo 1pt, weight 250g
+    for (let pass = 0; pass < 12; pass++) {
+      const best = new Map();
+      for (const o of arr) {
+        const k = Math.round(o.r / rq) + "|" + Math.round(o.e / eq) + "|" +
+                  Math.round(o.w / wq);
+        const cur = best.get(k);
+        if (cur === undefined || o.c < cur.c) best.set(k, o);
+      }
+      if (best.size <= beam || pass === 11) return [...best.values()];
+      rq *= 1.7; eq *= 1.7; wq *= 1.7;      // coarsen until it fits
     }
-    let out = [...best.values()];
-    if (out.length > beam) {
-      const byErgo = [...out].sort((a, b) => b.e - a.e || a.c - b.c);
-      const byRec = [...out].sort((a, b) => a.r - b.r || a.c - b.c);
-      const byCost = [...out].sort((a, b) => a.c - b.c || balanced(b) - balanced(a));
-      const keep = new Set();
-      const third = Math.floor(beam / 3);
-      for (const arr2 of [byErgo, byRec, byCost])
-        for (let i = 0; i < third && i < arr2.length; i++) keep.add(arr2[i]);
-      out = [...keep];
-    }
-    return out;
   }
 
   function materialize(x, slotName) {
