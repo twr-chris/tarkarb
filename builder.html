@@ -512,29 +512,49 @@ function frontier(db, gunId, opts) {
     return (required || forceMag) ? pruned : [null, ...pruned];
   }
 
-  function optionsFor(iid, stack) {
-    if (memo.has(iid) && !stack.has(iid)) return memo.get(iid);
+  // freeRoot: price this item at 0 because it is integral to the weapon —
+  // supplied with it and never sold separately. Its stats still count.
+  function optionsFor(iid, stack, freeRoot) {
+    const mk = freeRoot ? "free:" + iid : iid;
+    if (memo.has(mk) && !stack.has(iid)) return memo.get(mk);
     const it = db.items[iid];
     if (!it) return [];
     const pr = priceOf(db, iid, source, traderLL, freshDurable);
-    if (!pr) { excludedSet.add(iid); return []; }
+    if (!pr && !freeRoot) { excludedSet.add(iid); return []; }
+    const cost0 = pr ? pr[0] : 0;
+    const src0 = pr ? pr[1] : "included with weapon";
     const p = db.props(iid);
     const [e0, r0] = modStats(p);
-    let acc = [{ e: e0, r: r0, c: pr[0], w: it.weight || 0, b: { __src: pr[1] },
+    let acc = [{ e: e0, r: r0, c: cost0, w: it.weight || 0, b: { __src: src0 },
                  cf: new Set(it.conflictingItems || []),
                  cids: db.conflictUniverse.has(iid) ? new Set([iid]) : new Set() }];
     if (stack.has(iid)) return acc;                 // cycle guard: bare item
     const st = new Set(stack); st.add(iid);
     for (const slot of p.slots || []) {
       const allowed = (slot.filters || {}).allowedItems || [];
-      const so = slotOptions(allowed, slot.required, st, isMagSlot(slot, allowed),
-                             slot.nameId);
+      let so = slotOptions(allowed, slot.required, st, isMagSlot(slot, allowed),
+                           slot.nameId);
+      if (slot.required && !so.length) so = integralFallback(allowed, st);
       if (slot.required && !so.length) return [];
       acc = merge(acc, slot.nameId || slot.id || "?", so, BEAM_MOD);
       if (!acc.length) return [];
     }
-    if (!stack.has(iid)) memo.set(iid, acc);
+    if (!stack.has(iid)) memo.set(mk, acc);
     return acc;
+  }
+
+  // A required slot whose every option is unbuyable means the part is integral,
+  // not that the gun is unbuildable: 19 such slots exist (Rhino cylinder,
+  // PPSh-41 stock/receiver/barrel, Glock 18C barrel...), and each has exactly
+  // one allowed part with no price anywhere. Re-price those at zero.
+  function integralFallback(allowed, stack) {
+    const raw = [];
+    for (const cand of allowed) {
+      if (!magOK(cand)) continue;
+      for (const o of optionsFor(cand, stack, true))
+        raw.push({ e: o.e, r: o.r, c: o.c, w: o.w, cand, o });
+    }
+    return prune(raw, SLOT_CAP);
   }
 
   const gp = db.props(gunId);
@@ -553,10 +573,11 @@ function frontier(db, gunId, opts) {
     const slot = slots[i];
     postMessage({ type: "progress", msg: `solving ${slot.nameId} (${i + 1}/${slots.length})…` });
     const allowed = (slot.filters || {}).allowedItems || [];
-    const so = slotOptions(allowed, slot.required, new Set([gunId]),
-                           isMagSlot(slot, allowed), slot.nameId);
+    let so = slotOptions(allowed, slot.required, new Set([gunId]),
+                         isMagSlot(slot, allowed), slot.nameId);
+    if (slot.required && !so.length) so = integralFallback(allowed, new Set([gunId]));
     if (slot.required && !so.length)
-      return { error: `required slot ${slot.nameId} has no buyable parts under filters` };
+      return { error: `required slot ${slot.nameId} has no parts at all under filters` };
     acc = merge(acc, slot.nameId || "?", so, BEAM_ROOT);
     if (!acc.length) return { error: "no feasible build under constraints" };
   }
@@ -585,13 +606,16 @@ function frontier(db, gunId, opts) {
   // used to overwrite the tube with the buttstock. Fold every nested stock
   // socket into one "buttstock" category, and qualify any other collision by
   // depth rather than losing it.
-  function flatSlots(b, acc, depth) {
+  // The suffix counts POSITION IN THE CHAIN, not tree depth: ~2 is the second
+  // muzzle device in a stack, ~3 the third. Depth would be an accident of where
+  // the barrel happens to sit and would read as nonsense ("1th device").
+  function flatSlots(b, acc, depth, seen) {
     for (const [k, v] of Object.entries(b)) {
       if (k === "__src") continue;
-      let key = (depth > 0 && /^mod_stock(_\d+)?$/.test(k)) ? "mod_buttstock" : k;
-      if (acc[key] !== undefined) key = `${key}~${depth}`;
-      acc[key] = db.name(v[0]);
-      flatSlots(v[1], acc, depth + 1);
+      const base = (depth > 0 && /^mod_stock(_\d+)?$/.test(k)) ? "mod_buttstock" : k;
+      seen[base] = (seen[base] || 0) + 1;
+      acc[seen[base] === 1 ? base : `${base}~${seen[base]}`] = db.name(v[0]);
+      flatSlots(v[1], acc, depth + 1, seen);
     }
     return acc;
   }
@@ -601,7 +625,7 @@ function frontier(db, gunId, opts) {
     // vertical and horizontal are the SAME multiplier applied to two base
     // numbers (verified: 393/393 presets), so one exact value ranks both.
     rmul: 1 + o.r, rvExact: baseV * (1 + o.r),
-    src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}, 0),
+    src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}, 0, {}),
   })).sort((a, b) => a.c - b.c);
   return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap,
     conditionUnverified: /condition unverified/.test(gpr[1]),
@@ -757,17 +781,31 @@ const SLOT_LABEL = {
   mod_magazine: "magazine", mod_gas_block: "gas block", mod_scope: "scope",
   mod_foregrip: "foregrip", mod_charge: "charging handle", mod_mount: "mount",
   mod_sight_front: "front sight", mod_sight_rear: "rear sight", mod_tactical: "tactical",
-  mod_stock_000: "buttstock", mod_muzzle_000: "muzzle (2nd)",
-  mod_mount_000: "mount (2nd)", mod_mount_001: "mount (3rd)",
-  mod_scope_000: "scope (2nd)", mod_bipod: "bipod", mod_launcher: "launcher",
+  mod_stock_000: "buttstock", mod_bipod: "bipod", mod_launcher: "launcher",
   mod_equipment: "equipment", mod_flashlight: "flashlight",
 };
+// BSG numbers extra sockets from _000, so mod_mount_000 is the SECOND mount
+// position. Render them as plain numbers ("mount 2") so they don't collide with
+// the chain-position ordinal and produce "mount (2nd) (3rd)".
+const numberedSlot = s => s.replace(/^mod_/, "")
+  .replace(/_0*(\d+)$/, (_, d) => " " + (+d + 2)).replace(/_/g, " ");
+// A depth-qualified key means the part mounts ON the one in the outer slot —
+// a suppressor threaded onto an adapter, an optic on a ring mount. Say that
+// outright rather than the vague "nested", and carry the chain position, since
+// mod_muzzle~2 and mod_muzzle~3 are different links and must not share a label.
+const NESTED_NOUN = { mod_muzzle: "device", mod_scope: "on mount",
+                      mod_mount: "on mount" };
+const ORDINAL = { 2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th" };
 const slotLabel = s => {
   const m = s.match(/^(.*)~(\d+)$/);            // depth-qualified collision
   const base = m ? m[1] : s;
-  const lbl = SLOT_LABEL[base] ||
-    base.replace(/^mod_/, "").replace(/_(\d+)$/, " $1").replace(/_/g, " ");
-  return m ? `${lbl} (nested)` : lbl;
+  const lbl = SLOT_LABEL[base] || numberedSlot(base);
+  if (!m) return lbl;
+  const ord = ORDINAL[+m[2]] || `${m[2]}th`;
+  const noun = NESTED_NOUN[base];
+  return noun === "on mount" ? `${lbl} (${ord}, on mount)`
+       : noun ? `${lbl} (${ord} ${noun})`
+       : `${lbl} (${ord})`;
 };
 
 // The colour-by list is derived from the slots this weapon actually has, not a
