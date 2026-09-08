@@ -126,6 +126,7 @@
     <select id="stat">
       <option value="recoil" selected>recoil</option>
       <option value="ergo">ergonomics</option>
+      <option value="balance">balance (both)</option>
     </select>
   </label>
   <label class="ctl" title="Populated from the slots this weapon actually has; the number is how many different parts the builds use in that slot">color by
@@ -133,6 +134,10 @@
   </label>
   <label class="ctl" title="Only show builds costing at least this much — a spend floor, applied to the computed frontier">min ₽ <input id="floor" type="number" value="0" step="50000"></label>
   <label class="ctl" title="Hard ceiling used during the search">max ₽ <input id="budget" type="number" value="600000" step="50000"></label>
+  <label class="ctl" id="balWrap" hidden title="How the two axes are weighted in the balance score. Left = recoil matters more, right = ergonomics matters more. There is no correct setting — it is a preference.">
+    lean <input id="balW" type="range" min="0" max="100" value="50" style="width:110px">
+    <span id="balLbl" style="font:11px var(--mono);color:var(--gold);min-width:74px"></span>
+  </label>
   <label class="ctl" title="Where parts may be sourced from">source
     <select id="source">
       <option value="both" selected>flea + traders</option>
@@ -679,8 +684,29 @@ const fmt = n => Math.round(n).toLocaleString("en-US");
 // multiplier, unrounded). Horizontal scales by the identical multiplier, so it
 // would rank every build the same and only change the tick values — vertical is
 // used because it is the figure on the in-game weapon screen.
+// "balance" is a weighted GEOMETRIC mean of the two stats, each normalised to
+// what this gun can actually achieve. Geometric rather than arithmetic on
+// purpose: a sum lets a build look average by being superb at one axis and
+// worthless at the other, whereas a product collapses toward zero if either
+// axis is worst-in-class — which is what "balanced" should mean.
+//   bal = ergoNorm^w * recoilNorm^(1-w)
+// Because normalisation uses this gun's own range, the number ranks builds
+// WITHIN one weapon and is meaningless across weapons.
 const STATS = { recoil: ["vertical recoil", p => p.rvExact, true],
-                ergo: ["ergonomics", p => p.ergo, false] };
+                ergo: ["ergonomics", p => p.ergo, false],
+                balance: ["balance (ergo × recoil)", p => p._bal, false] };
+
+function computeBalance(idx, w) {
+  const es = idx.map(i => points[i].ergo), rs = idx.map(i => points[i].rvExact);
+  const eLo = Math.min(...es), eHi = Math.max(...es);
+  const rLo = Math.min(...rs), rHi = Math.max(...rs);
+  for (const i of idx) {
+    const p = points[i];
+    const en = eHi > eLo ? (p.ergo - eLo) / (eHi - eLo) : 1;
+    const rn = rHi > rLo ? (rHi - p.rvExact) / (rHi - rLo) : 1;   // lower recoil = better
+    p._bal = Math.pow(Math.max(en, 1e-6), w) * Math.pow(Math.max(rn, 1e-6), 1 - w);
+  }
+}
 let worker = null, points = [], selected = null, bootedMode = null, weaponInfo = null;
 let traderList = [];
 
@@ -1004,6 +1030,16 @@ function drawChart() {
     $("explain").innerHTML = "";
     return;
   }
+  // balance is derived from the visible set, so it must be computed after the
+  // spend floor has filtered and before anything reads the value
+  const isBal = $("stat").value === "balance";
+  $("balWrap").hidden = !isBal;
+  if (isBal) {
+    const w = +$("balW").value / 100;
+    computeBalance(order, w);
+    $("balLbl").textContent = w === 0.5 ? "50/50"
+      : `${Math.round((1 - w) * 100)}% recoil`;
+  }
   explainClusters(order);
   const gs = order.map(i => good(points[i]));
   // skyline: walk best-stat-first, keep a point only when it's cheaper than
@@ -1167,6 +1203,7 @@ $("freshDurable").addEventListener("change", compute);
 $("excludeOptics").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
+$("balW").addEventListener("input", () => { if (points.length) drawChart(); });
 $("floor").addEventListener("input", () => { if (points.length) drawChart(); });
 $("mode").addEventListener("change", () => { overlay("switching economy…"); bootWorker(); });
 
