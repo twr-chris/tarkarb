@@ -480,11 +480,24 @@ function frontier(db, gunId, opts) {
     }
     return out;
   }
-  function flatSlots(b, acc) {
+  // Flatten the build to slot -> part name.
+  //
+  // AR-pattern stocks need care. The weapon's own mod_stock socket holds EITHER
+  // a buffer tube / receiver extension (which something mounts onto) OR a
+  // complete standalone stock — on the M4A1, 10 of 17 are tubes and 7 are
+  // terminal stocks. Worse, BSG names the buttstock socket on those tubes four
+  // different ways: mod_stock_000 (6 tubes), mod_stock_001, mod_stock_003, and
+  // bare mod_stock (4 tubes) — which COLLIDES with the weapon's own socket and
+  // used to overwrite the tube with the buttstock. Fold every nested stock
+  // socket into one "buttstock" category, and qualify any other collision by
+  // depth rather than losing it.
+  function flatSlots(b, acc, depth) {
     for (const [k, v] of Object.entries(b)) {
       if (k === "__src") continue;
-      acc[k] = db.name(v[0]);
-      flatSlots(v[1], acc);
+      let key = (depth > 0 && /^mod_stock(_\d+)?$/.test(k)) ? "mod_buttstock" : k;
+      if (acc[key] !== undefined) key = `${key}~${depth}`;
+      acc[key] = db.name(v[0]);
+      flatSlots(v[1], acc, depth + 1);
     }
     return acc;
   }
@@ -494,7 +507,7 @@ function frontier(db, gunId, opts) {
     // vertical and horizontal are the SAME multiplier applied to two base
     // numbers (verified: 393/393 presets), so one exact value ranks both.
     rmul: 1 + o.r, rvExact: baseV * (1 + o.r),
-    src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}),
+    src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}, 0),
   })).sort((a, b) => a.c - b.c);
   return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap,
     weapon: { angle: gp.recoilAngle ?? 90, dispersion: gp.recoilDispersion ?? 10,
@@ -594,18 +607,24 @@ function compute() {
 }
 
 const SLOT_LABEL = {
-  mod_reciever: "receiver", mod_handguard: "handguard", mod_stock: "stock",
+  mod_reciever: "receiver", mod_handguard: "handguard",
+  mod_stock: "stock / buffer tube", mod_buttstock: "buttstock (on tube)",
   mod_barrel: "barrel", mod_muzzle: "muzzle", mod_pistol_grip: "grip",
   mod_magazine: "magazine", mod_gas_block: "gas block", mod_scope: "scope",
   mod_foregrip: "foregrip", mod_charge: "charging handle", mod_mount: "mount",
   mod_sight_front: "front sight", mod_sight_rear: "rear sight", mod_tactical: "tactical",
-  mod_stock_000: "stock (on tube)", mod_muzzle_000: "muzzle (2nd)",
+  mod_stock_000: "buttstock", mod_muzzle_000: "muzzle (2nd)",
   mod_mount_000: "mount (2nd)", mod_mount_001: "mount (3rd)",
   mod_scope_000: "scope (2nd)", mod_bipod: "bipod", mod_launcher: "launcher",
   mod_equipment: "equipment", mod_flashlight: "flashlight",
 };
-const slotLabel = s => SLOT_LABEL[s] ||
-  s.replace(/^mod_/, "").replace(/_(\d+)$/, " $1").replace(/_/g, " ");
+const slotLabel = s => {
+  const m = s.match(/^(.*)~(\d+)$/);            // depth-qualified collision
+  const base = m ? m[1] : s;
+  const lbl = SLOT_LABEL[base] ||
+    base.replace(/^mod_/, "").replace(/_(\d+)$/, " $1").replace(/_/g, " ");
+  return m ? `${lbl} (nested)` : lbl;
+};
 
 // The colour-by list is derived from the slots this weapon actually has, not a
 // hardcoded guess: every slot whose part choice VARIES across the frontier is
