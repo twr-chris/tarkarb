@@ -23,6 +23,7 @@
   header h1 span { color: var(--dim); font-weight: 400; letter-spacing: 0; font-size: 12px; margin-left: 8px; }
   .ctl { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim);
          text-transform: uppercase; letter-spacing: 1px; }
+  .ctl[hidden] { display: none; }   /* author display:flex beats UA [hidden] */
   .ctl input, .ctl select { background: var(--panel2); color: var(--text);
     border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 12px var(--mono); }
   .ctl input[type=number] { width: 95px; }
@@ -1016,8 +1017,7 @@ function drawChart() {
   // through cheap partial builds, so a minimum cost can only be applied to
   // finished builds. Skyline recomputes over whatever survives the filter.
   const floor = +$("floor").value || 0;
-  const order = points.map((_, i) => i).filter(i => points[i].c >= floor)
-    .sort((a, b) => good(points[a]) - good(points[b]));
+  const order = points.map((_, i) => i).filter(i => points[i].c >= floor);
   $("shown").textContent = floor > 0
     ? `${order.length} of ${points.length} builds ≥ ${fmt(floor)} ₽` : "";
   if (!order.length) {
@@ -1030,8 +1030,11 @@ function drawChart() {
     $("explain").innerHTML = "";
     return;
   }
-  // balance is derived from the visible set, so it must be computed after the
-  // spend floor has filtered and before anything reads the value
+  // Balance is derived from the visible set, so it must be computed AFTER the
+  // spend floor filters and BEFORE anything reads the value — including the
+  // sort below, which calls good(). Sorting first left every _bal undefined on
+  // the initial switch to this stat, so the comparator returned NaN and the
+  // chart drew in garbage order until a later redraw found stale values.
   const isBal = $("stat").value === "balance";
   $("balWrap").hidden = !isBal;
   if (isBal) {
@@ -1040,6 +1043,7 @@ function drawChart() {
     $("balLbl").textContent = w === 0.5 ? "50/50"
       : `${Math.round((1 - w) * 100)}% recoil`;
   }
+  order.sort((a, b) => good(points[a]) - good(points[b]));
   explainClusters(order);
   const gs = order.map(i => good(points[i]));
   // skyline: walk best-stat-first, keep a point only when it's cheaper than
