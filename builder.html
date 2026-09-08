@@ -58,6 +58,34 @@
   #explain:empty { display: none; }
   #explain b { color: var(--text); font-weight: 600; }
   #explain .gate { color: var(--gold); cursor: pointer; border-bottom: 1px dotted var(--gold); }
+  /* legend renders last and full width regardless of DOM position */
+  #legendbox { flex: 1 1 100%; order: 9; background: var(--panel);
+               border: 1px solid var(--line); border-radius: 6px; padding: 4px 14px; }
+  #legendbox summary { cursor: pointer; padding: 9px 2px; font-size: 12px;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--gold); font-weight: 600; }
+  #legendbox summary:hover { color: var(--text); }
+  .legend-body { padding: 4px 2px 14px; max-width: 1000px; }
+  .legend-body p { margin: 10px 0; color: var(--dim); font-size: 13px; line-height: 1.6; }
+  .legend-body p.lead { color: var(--text); }
+  .legend-body b { color: var(--text); }
+  .legend-body code { font: 12px var(--mono); color: var(--blue); }
+  .legend-body pre { font: 12px/1.5 var(--mono); background: var(--panel2); color: var(--text);
+    border-left: 3px solid var(--gold); border-radius: 3px; padding: 10px 12px;
+    overflow-x: auto; margin: 6px 0; }
+  .legend-body .src { color: var(--dim); font-size: 12px; margin-bottom: 2px; }
+  .legend-body .foot { font-size: 12px; font-style: italic; }
+  .legend-body .warn { color: var(--red); }
+  .legend-table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  .legend-table th { text-align: left; vertical-align: top; padding: 8px 14px 8px 0;
+    color: var(--gold); font: 12px var(--mono); font-weight: 600; white-space: nowrap;
+    border-bottom: 1px solid #23221e; }
+  .legend-table td { padding: 8px 0; color: var(--dim); font-size: 13px; line-height: 1.6;
+    border-bottom: 1px solid #23221e; }
+  .legend-table .fld { color: var(--dim); font-weight: 400; font-size: 11px; }
+  .legend-table.res th, .legend-table.res td { font: 12px var(--mono); white-space: nowrap;
+    padding: 5px 18px 5px 0; color: var(--dim); }
+  .legend-table.res th { color: var(--dim); }
+  .legend-table.res td.ok { color: var(--green); }
   .patrow { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
   #pattern { flex: 0 0 auto; background: var(--panel2); border-radius: 5px; }
   #totals { flex: 1; font: 13px var(--mono); background: var(--panel2); border-radius: 5px;
@@ -132,6 +160,74 @@
       own bar rather than as screen width. Lateral wander comes from the recoil angle plus
       dispersion randomising it shot to shot, which is what the cone shows.</div>
   </section>
+  <section id="legendbox">
+    <details>
+      <summary>Reading the recoil model — what these numbers actually mean</summary>
+      <div class="legend-body">
+        <p class="lead">Tarkov shows four recoil numbers and most sources describe one of them
+        wrongly. Here is what each does, taken from the game's own <code>ShotEffector</code>
+        and confirmed by live-fire testing.</p>
+
+        <table class="legend-table">
+          <tr>
+            <th>Vertical recoil<br><span class="fld">RecoilForceUp</span></th>
+            <td>The size of the kick <b>in the plane you are looking at</b>. It drives the climb
+            — and, steered by the recoil angle, every bit of sideways drift too. This is the
+            number that decides whether you can hold a burst on target.</td>
+          </tr>
+          <tr>
+            <th>Horizontal recoil<br><span class="fld">RecoilForceBack</span></th>
+            <td>The shove <b>straight back into your shoulder</b>, on the depth axis. Despite the
+            name it is <b>not</b> left-right sway and it does not move your shots sideways at all.
+            It is also on a different scale from vertical, so the two are not comparable to each
+            other — compare vertical across guns, or horizontal across guns, never one against
+            the other on the same gun. <span class="warn">The wiki and most guides call this
+            "side-to-side drift." That is incorrect.</span></td>
+          </tr>
+          <tr>
+            <th>Recoil angle<br><span class="fld">RecoilAngle</span></th>
+            <td>Which way the kick points, in degrees. <b>90° is straight up.</b> Below 90° the
+            group walks <b>right</b>; above 90° it walks <b>left</b>. Fixed per weapon — no
+            attachment changes it.</td>
+          </tr>
+          <tr>
+            <th>Dispersion<br><span class="fld">RecolDispersion</span></th>
+            <td>Randomises the kick angle from shot to shot, spreading it into a cone.
+            <b>This — not horizontal recoil — is where lateral wander and the classic S-pattern
+            come from.</b> Also fixed per weapon.</td>
+          </tr>
+        </table>
+
+        <p><b>Why this tool shows a single recoil number:</b> every attachment carries one
+        <code>recoilModifier</code> applied to both axes, so they always scale together and their
+        ratio never changes. Verified against all 393 in-game presets, and visible on any weapon
+        screen — a stock AK-101 reads 71 / 179 against the bare receiver's 98 / 248, which is
+        ×0.7245 and ×0.7218: the same multiplier twice.</p>
+
+        <p class="src">From <code>ShotEffector</code>, per SPT-Realism's recoil overhaul:</p>
+        <pre>RecoilDirection = Vector3(-sin(θ) * vertRecoil,   // climb
+                          cos(θ) * vertRecoil,   // lateral
+                          hRecoil)               // back into the shoulder
+
+θ = Random.Range(angle - dispersion, angle + dispersion)</pre>
+        <p>Read that and the diagram follows: the on-screen kick is driven <i>entirely</i> by
+        vertical recoil, aimed at the recoil angle, with dispersion jittering that aim each shot.
+        Horizontal recoil sits on its own axis, outside the picture.</p>
+
+        <p class="src">Confirmed live — 30-round auto dumps, aimed, no mouse input:</p>
+        <table class="legend-table res">
+          <tr><th>weapon</th><th>angle</th><th>predicted</th><th>observed</th></tr>
+          <tr><td>Colt M4A1</td><td>90°</td><td>dead vertical</td><td class="ok">vertical column</td></tr>
+          <tr><td>Kalashnikov AKM</td><td>85°</td><td>5° right</td><td class="ok">drifted right</td></tr>
+          <tr><td>Kalashnikov AK-101</td><td>100°</td><td>10° left</td><td class="ok">drifted left</td></tr>
+        </table>
+        <p class="foot">The direction reverses exactly at 90°, and the AK-101 — which has the
+        <i>lowest</i> horizontal recoil of the three — drifted the furthest sideways. Nothing but
+        the recoil angle explains that.</p>
+      </div>
+    </details>
+  </section>
+
   <section id="buildbox">
     <h2>Selected build</h2>
     <div class="patrow">
