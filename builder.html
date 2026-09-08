@@ -31,6 +31,17 @@
   button { background: var(--gold); color: #1a1912; border: 0; border-radius: 4px;
            padding: 6px 16px; font-weight: 600; cursor: pointer; letter-spacing: 1px; }
   button:disabled { opacity: .5; cursor: default; }
+  #traderbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+    padding: 7px 20px; background: var(--panel2); border-bottom: 1px solid var(--line); }
+  #traderbar .tb-label { font-size: 11px; color: var(--dim); text-transform: uppercase;
+    letter-spacing: 1px; }
+  #traderctl { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+  #traderctl label { display: flex; align-items: center; gap: 4px; font-size: 12px;
+    color: var(--text); }
+  #traderctl select { background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px;
+    font: 12px var(--mono); }
+  #traderctl select.locked { color: var(--red); }
   #status { padding: 7px 20px; color: var(--dim); font: 12px var(--mono); min-height: 18px; }
   #status .ok { color: var(--green); } #status .err { color: var(--red); }
 
@@ -123,15 +134,22 @@
   </label>
   <label class="ctl" title="Only show builds costing at least this much — a spend floor, applied to the computed frontier">min ₽ <input id="floor" type="number" value="0" step="50000"></label>
   <label class="ctl" title="Hard ceiling used during the search">max ₽ <input id="budget" type="number" value="600000" step="50000"></label>
-  <label class="ctl"><input id="fleaOnly" type="checkbox"> flea only</label>
-  <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
-  <label class="ctl">max LL
-    <select id="maxLL"><option>1</option><option>2</option><option>3</option>
-      <option selected>4</option></select>
+  <label class="ctl" title="Where parts may be sourced from">source
+    <select id="source">
+      <option value="both" selected>flea + traders</option>
+      <option value="flea">flea only</option>
+      <option value="trader">traders only</option>
+    </select>
   </label>
+  <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
   <button id="run">COMPUTE</button>
   <a href="index.html" style="margin-left:auto">← ARBITRAGE BOARD</a>
 </header>
+
+<div id="traderbar" title="Your unlocked loyalty level with each trader that sells weapon parts; 0 means locked out entirely">
+  <span class="tb-label">trader levels</span>
+  <span id="traderctl"></span>
+</div>
 
 <div id="status">booting worker…</div>
 
@@ -250,10 +268,15 @@ async function getJson(path) {
 async function loadDB(mode) {
   if (DBs[mode]) return DBs[mode];
   postMessage({ type: "progress", msg: `downloading ${mode} item data…` });
-  const [raw, tr] = await Promise.all([getJson(`/${mode}/items`), getJson(`/${mode}/items_en`)]);
+  const [raw, tr, trd, trdn] = await Promise.all([
+    getJson(`/${mode}/items`), getJson(`/${mode}/items_en`),
+    getJson(`/${mode}/traders`), getJson(`/${mode}/traders_en`)]);
   const items = raw.data.items, names = tr.data;
+  const traderName = {};
+  for (const [tid, t] of Object.entries(trd.data))
+    traderName[tid] = trdn.data[t.name] ?? t.normalizedName ?? tid;
   const db = {
-    items,
+    items, traderName,
     name: id => { const it = items[id]; return it ? (names[it.name] ?? it.normalizedName ?? id) : id; },
     props: id => (items[id] || {}).properties || {},
     conflictUniverse: new Set(),
@@ -266,17 +289,21 @@ async function loadDB(mode) {
 
 function modStats(p) { return [p.ergonomics || 0, p.recoilModifier || 0]; }
 
-function priceOf(db, iid, fleaOnly, maxLL) {
+// source: "flea" | "trader" | "both".  traderLL: {traderId: unlocked level},
+// 0 meaning that trader is unavailable entirely.
+function priceOf(db, iid, source, traderLL) {
   const it = db.items[iid];
   if (!it) return null;
   let best = null;
   const noFlea = (it.types || []).some(t => t.toLowerCase() === "noflea");
-  if (it.lastLowPrice && !noFlea) best = [it.lastLowPrice, "Flea"];
-  if (!fleaOnly) {
+  if (source !== "trader" && it.lastLowPrice && !noFlea) best = [it.lastLowPrice, "Flea"];
+  if (source !== "flea") {
     for (const o of it.buyFromTrader || []) {
       if (o.taskUnlock) continue;
-      if ((o.minTraderLevel || 1) > maxLL) continue;
-      if (o.priceRUB && (!best || o.priceRUB < best[0])) best = [o.priceRUB, `LL${o.minTraderLevel}`];
+      const have = traderLL[o.trader] ?? 0;
+      if (!have || (o.minTraderLevel || 1) > have) continue;
+      if (o.priceRUB && (!best || o.priceRUB < best[0]))
+        best = [o.priceRUB, `${db.traderName[o.trader] ?? "trader"} L${o.minTraderLevel}`];
     }
   }
   return best;
@@ -330,7 +357,7 @@ function defaultMagCap(db, gunId) {
 }
 
 function frontier(db, gunId, opts) {
-  const { fleaOnly, maxLL, budget, usableMag } = opts;
+  const { source, traderLL, budget, usableMag } = opts;
   const memo = new Map();
   const excludedSet = new Set();
   const minMagCap = usableMag ? defaultMagCap(db, gunId) : 0;
@@ -430,7 +457,7 @@ function frontier(db, gunId, opts) {
     if (memo.has(iid) && !stack.has(iid)) return memo.get(iid);
     const it = db.items[iid];
     if (!it) return [];
-    const pr = priceOf(db, iid, fleaOnly, maxLL);
+    const pr = priceOf(db, iid, source, traderLL);
     if (!pr) { excludedSet.add(iid); return []; }
     const p = db.props(iid);
     const [e0, r0] = modStats(p);
@@ -452,7 +479,11 @@ function frontier(db, gunId, opts) {
 
   const gp = db.props(gunId);
   const gun = db.items[gunId];
-  const gpr = priceOf(db, gunId, fleaOnly, maxLL) || [0, "unpriced"];
+  // If the receiver itself cannot be sourced the build is impossible — pricing
+  // it at 0 would silently make every build look cheaper than it is.
+  const gpr = priceOf(db, gunId, source, traderLL);
+  if (!gpr) return { error: `${db.name(gunId)} cannot be bought from the selected ` +
+    `source at these trader levels — raise a level or widen the source` };
   let acc = [{ e: 0, r: 0, c: gpr[0], w: gun.weight || 0, b: { __src: gpr[1] },
                cf: new Set(gun.conflictingItems || []), cids: new Set() }];
   const slots = gp.slots || [];
@@ -523,8 +554,21 @@ onmessage = async ev => {
         .filter(i => (i.properties || {}).propertiesType === "ItemPropertiesWeapon")
         .map(i => ({ id: i.id, name: db.name(i.id) }))
         .sort((a, b) => a.name.localeCompare(b.name));
+      // which traders actually sell weapon-relevant parts, and to what level
+      const sellers = {};
+      for (const it of Object.values(db.items)) {
+        const pt = (it.properties || {}).propertiesType || "";
+        if (!/WeaponMod|Weapon|Magazine|Scope|Barrel|Preset/.test(pt)) continue;
+        for (const o of it.buyFromTrader || []) {
+          const s = sellers[o.trader] || (sellers[o.trader] =
+            { id: o.trader, name: db.traderName[o.trader] ?? o.trader, max: 1, offers: 0 });
+          s.offers++;
+          if ((o.minTraderLevel || 1) > s.max) s.max = o.minTraderLevel;
+        }
+      }
+      const traders = Object.values(sellers).sort((a, b) => b.offers - a.offers);
       const v = validate(db);
-      postMessage({ type: "boot", weapons, validate: v });
+      postMessage({ type: "boot", weapons, validate: v, traders });
     } else if (m.type === "frontier") {
       const t0 = performance.now();
       const res = frontier(db, m.gunId, m);
@@ -548,6 +592,36 @@ const fmt = n => Math.round(n).toLocaleString("en-US");
 const STATS = { recoil: ["vertical recoil", p => p.rvExact, true],
                 ergo: ["ergonomics", p => p.ergo, false], w: ["weight kg", p => p.w, true] };
 let worker = null, points = [], selected = null, bootedMode = null, weaponInfo = null;
+let traderList = [];
+
+// One loyalty dropdown per trader that actually sells weapon parts, discovered
+// from the data rather than hardcoded. Level 0 locks the trader out entirely.
+function buildTraderControls(traders) {
+  traderList = traders;
+  const host = $("traderctl");
+  host.innerHTML = "";
+  for (const t of traders) {
+    const lab = document.createElement("label");
+    lab.title = `${t.offers} weapon-part offers`;
+    const sel = document.createElement("select");
+    sel.dataset.trader = t.id;
+    for (let l = 0; l <= t.max; l++) {
+      const o = document.createElement("option");
+      o.value = l; o.textContent = l === 0 ? "—" : l;
+      if (l === t.max) o.selected = true;
+      sel.appendChild(o);
+    }
+    const mark = () => sel.classList.toggle("locked", sel.value === "0");
+    sel.addEventListener("change", () => { mark(); compute(); });
+    mark();
+    lab.append(t.name + " ", sel);
+    host.appendChild(lab);
+  }
+}
+
+const traderLevels = () => Object.fromEntries(
+  [...document.querySelectorAll("#traderctl select")]
+    .map(s => [s.dataset.trader, +s.value]));
 
 function setStatus(html) { $("status").innerHTML = html; }
 function overlay(msg) {
@@ -573,6 +647,7 @@ function bootWorker() {
       }
       sel.value = "5447a9cd4bdc2dbd208b4567";           // Colt M4A1
       if (!sel.value) sel.selectedIndex = 0;
+      buildTraderControls(m.traders || []);
       const v = m.validate;
       setStatus(`stat model self-test vs in-game presets: ` +
         `<span class="${v.passed === v.total ? "ok" : "err"}">${v.passed}/${v.total} exact</span>` +
@@ -601,7 +676,7 @@ function compute() {
   overlay("crunching the build space…");
   worker.postMessage({
     type: "frontier", mode: $("mode").value, gunId: $("gun").value,
-    fleaOnly: $("fleaOnly").checked, maxLL: +$("maxLL").value,
+    source: $("source").value, traderLL: traderLevels(),
     budget: +$("budget").value || null, usableMag: $("usableMag").checked,
   });
 }
@@ -978,6 +1053,7 @@ function renderTree(nodes) {
 
 $("run").addEventListener("click", compute);
 $("usableMag").addEventListener("change", compute);
+$("source").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
 $("floor").addEventListener("input", () => { if (points.length) drawChart(); });
