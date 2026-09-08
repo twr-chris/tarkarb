@@ -43,6 +43,22 @@
     border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px;
     font: 12px var(--mono); }
   #traderctl select.locked { color: var(--red); }
+  #lockbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 7px 20px; background: #241f14; border-bottom: 1px solid var(--gold); }
+  #lockbar[hidden] { display: none; }
+  #lockctl { display: flex; flex-wrap: wrap; gap: 6px; }
+  .lockchip { display: inline-flex; align-items: center; gap: 6px;
+    background: var(--panel); border: 1px solid var(--gold); border-radius: 3px;
+    padding: 2px 6px 2px 8px; font: 12px var(--mono); color: var(--text); }
+  .lockchip button { background: none; border: 0; color: var(--dim); cursor: pointer;
+    font: 14px/1 var(--mono); padding: 0 2px; }
+  .lockchip button:hover { color: var(--red); }
+  .linkish { background: none; border: 0; color: var(--dim); cursor: pointer;
+    font: 11px var(--mono); text-decoration: underline; padding: 0; letter-spacing: 0; }
+  .linkish:hover { color: var(--text); }
+  ul.tree .pname { cursor: pointer; border-bottom: 1px dotted transparent; }
+  ul.tree .pname:hover { color: var(--gold); border-bottom-color: var(--gold); }
+  ul.tree .pname.islocked { color: var(--gold); font-weight: 600; }
   #status { padding: 7px 20px; color: var(--dim); font: 12px var(--mono); min-height: 18px; }
   #status .ok { color: var(--green); } #status .err { color: var(--red); }
 
@@ -156,6 +172,12 @@
 <div id="traderbar" title="Your unlocked loyalty level with each trader that sells weapon parts; 0 means locked out entirely">
   <span class="tb-label">trader levels</span>
   <span id="traderctl"></span>
+</div>
+
+<div id="lockbar" hidden>
+  <span class="tb-label">locked parts</span>
+  <span id="lockctl"></span>
+  <button id="clearLocks" class="linkish">clear all</button>
 </div>
 
 <div id="status">booting worker…</div>
@@ -419,6 +441,11 @@ function defaultMagCap(db, gunId) {
 
 function frontier(db, gunId, opts) {
   const { source, traderLL, budget, usableMag, freshDurable, excludeOptics } = opts;
+  // Locked parts: every surviving build must contain these. Enforced twice —
+  // slots that CAN hold a locked part are narrowed to it (which prunes the
+  // search), and finished builds are filtered, which catches the case where a
+  // different subtree offers no slot for it at all.
+  const locked = new Set(opts.locked || []);
   const memo = new Map();
   const excludedSet = new Set();
   const minMagCap = usableMag ? defaultMagCap(db, gunId) : 0;
@@ -506,6 +533,10 @@ function frontier(db, gunId, opts) {
   function slotOptions(allowed, required, stack, magSlot, slotName) {
     if (excludeOptics && SIGHT_SLOT.test(slotName || ""))
       return required ? [] : [null];              // leave sighting slots empty
+    if (locked.size) {
+      const hit = allowed.filter(a => locked.has(a));
+      if (hit.length) { allowed = hit; required = true; }
+    }
     const raw = [];
     for (const cand of allowed) {
       if (!magOK(cand)) continue;
@@ -590,6 +621,23 @@ function frontier(db, gunId, opts) {
     if (!acc.length) return { error: "no feasible build under constraints" };
   }
 
+  if (locked.size) {
+    const idsOf = (b, out) => {
+      for (const [k, v] of Object.entries(b)) {
+        if (k === "__src") continue;
+        out.add(v[0]); idsOf(v[1], out);
+      }
+      return out;
+    };
+    acc = acc.filter(o => {
+      const ids = idsOf(o.b, new Set());
+      for (const l of locked) if (!ids.has(l)) return false;
+      return true;
+    });
+    if (!acc.length) return { error:
+      `no build can use ${locked.size === 1 ? "that locked part" : "all locked parts"} ` +
+      `together under the current filters — unlock one, or widen source/budget` };
+  }
   const baseE = gp.ergonomics || 0, baseV = gp.recoilVertical || 0, baseH = gp.recoilHorizontal || 0;
   function renderTree(b) {
     const out = [];
@@ -597,7 +645,7 @@ function frontier(db, gunId, opts) {
       if (k === "__src") continue;
       const [cid, cb] = v;
       const p = db.props(cid);
-      out.push({ slot: k, name: db.name(cid), src: cb.__src || "?",
+      out.push({ slot: k, id: cid, name: db.name(cid), src: cb.__src || "?",
                  e: p.ergonomics || 0, r: p.recoilModifier || 0,
                  children: renderTree(cb) });
     }
@@ -800,6 +848,7 @@ function compute() {
     budget: +$("budget").value || null, usableMag: $("usableMag").checked,
     freshDurable: $("freshDurable").checked,
     excludeOptics: $("excludeOptics").checked,
+    locked: [...locks.keys()],
   });
 }
 
@@ -1183,6 +1232,11 @@ function selectPoint(i) {
   $("tree").appendChild(renderTree(p.tree));
 }
 
+// Clicking a part locks it: every build in the next frontier must use it.
+// Answers "what is the best build around THIS barrel", which is how people
+// actually choose — the role dictates the barrel, then everything else follows.
+const locks = new Map();          // itemId -> display name
+
 function renderTree(nodes) {
   const ul = document.createElement("ul");
   ul.className = "tree";
@@ -1192,12 +1246,39 @@ function renderTree(nodes) {
       n.e ? `<span class="${n.e > 0 ? "stat-good" : "stat-bad"}">ergo${n.e > 0 ? "+" : ""}${n.e}</span>` : "",
       n.r ? `<span class="${n.r < 0 ? "stat-good" : "stat-bad"}">rec${(n.r * 100).toFixed(0)}%</span>` : "",
     ].filter(Boolean).join(" ");
-    li.innerHTML = `<span class="slotname">${n.slot.replace(/^mod_/, "")}:</span> ` +
-      `${n.name} <span class="src">[${n.src}]</span> ${stats}`;
+    const on = locks.has(n.id);
+    li.innerHTML = `<span class="slotname">${slotLabel(n.slot)}:</span> ` +
+      `<span class="pname${on ? " islocked" : ""}" data-id="${n.id}" ` +
+      `title="${on ? "Locked — click to unlock" : "Click to lock this part into every build"}">` +
+      `${on ? "🔒 " : ""}${n.name}</span> <span class="src">[${n.src}]</span> ${stats}`;
+    li.querySelector(".pname").addEventListener("click", () => toggleLock(n.id, n.name));
     if (n.children.length) li.appendChild(renderTree(n.children));
     ul.appendChild(li);
   }
   return ul;
+}
+
+function toggleLock(id, name) {
+  if (locks.has(id)) locks.delete(id); else locks.set(id, name);
+  renderLocks();
+  compute();
+}
+
+function renderLocks() {
+  const bar = $("lockbar"), host = $("lockctl");
+  bar.hidden = locks.size === 0;
+  host.innerHTML = "";
+  for (const [id, name] of locks) {
+    const chip = document.createElement("span");
+    chip.className = "lockchip";
+    chip.textContent = name.length > 42 ? name.slice(0, 41) + "…" : name;
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = "Unlock";
+    x.addEventListener("click", () => { locks.delete(id); renderLocks(); compute(); });
+    chip.appendChild(x);
+    host.appendChild(chip);
+  }
 }
 
 $("run").addEventListener("click", compute);
@@ -1205,6 +1286,8 @@ $("usableMag").addEventListener("change", compute);
 $("source").addEventListener("change", compute);
 $("freshDurable").addEventListener("change", compute);
 $("excludeOptics").addEventListener("change", compute);
+$("clearLocks").addEventListener("click", () => { locks.clear(); renderLocks(); compute(); });
+$("gun").addEventListener("change", () => { locks.clear(); renderLocks(); });
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
 $("balW").addEventListener("input", () => { if (points.length) drawChart(); });
