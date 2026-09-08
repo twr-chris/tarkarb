@@ -142,6 +142,7 @@
     </select>
   </label>
   <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
+  <label class="ctl" title="Buy any part that has a durability rating from a trader, who always sells undamaged. A flea listing's condition is unknown and unknowable from this data — a cheap one is either worn or simply mispriced, and both look identical."><input id="freshDurable" type="checkbox" checked> 100/100</label>
   <button id="run">COMPUTE</button>
   <a href="index.html" style="margin-left:auto">← ARBITRAGE BOARD</a>
 </header>
@@ -289,15 +290,30 @@ async function loadDB(mode) {
 
 function modStats(p) { return [p.ergonomics || 0, p.recoilModifier || 0]; }
 
+function hasDurability(db, iid) {
+  const it = db.items[iid] || {}, p = db.props(iid);
+  return p.durability != null || p.maxDurability != null || it.maxDurability != null;
+}
+
 // source: "flea" | "trader" | "both".  traderLL: {traderId: unlocked level},
 // 0 meaning that trader is unavailable entirely.
-function priceOf(db, iid, source, traderLL) {
+//
+// freshDurable: durability-bearing parts must come from a trader. Traders sell
+// 100/100 by definition, whereas a flea listing's condition is unknown AND
+// unknowable from this data — there is one price per item id with no condition
+// dimension, and a cheap listing is either worn or simply mispriced, which look
+// identical. Rather than guess, buy the guarantee. This overrides `source` for
+// those items specifically, so "flea only + fresh" still sources them from a
+// trader instead of becoming unbuildable.
+function priceOf(db, iid, source, traderLL, freshDurable) {
   const it = db.items[iid];
   if (!it) return null;
   let best = null;
+  const forceTrader = freshDurable && hasDurability(db, iid);
   const noFlea = (it.types || []).some(t => t.toLowerCase() === "noflea");
-  if (source !== "trader" && it.lastLowPrice && !noFlea) best = [it.lastLowPrice, "Flea"];
-  if (source !== "flea") {
+  if (!forceTrader && source !== "trader" && it.lastLowPrice && !noFlea)
+    best = [it.lastLowPrice, "Flea"];
+  if (forceTrader || source !== "flea") {
     for (const o of it.buyFromTrader || []) {
       if (o.taskUnlock) continue;
       const have = traderLL[o.trader] ?? 0;
@@ -357,7 +373,7 @@ function defaultMagCap(db, gunId) {
 }
 
 function frontier(db, gunId, opts) {
-  const { source, traderLL, budget, usableMag } = opts;
+  const { source, traderLL, budget, usableMag, freshDurable } = opts;
   const memo = new Map();
   const excludedSet = new Set();
   const minMagCap = usableMag ? defaultMagCap(db, gunId) : 0;
@@ -457,7 +473,7 @@ function frontier(db, gunId, opts) {
     if (memo.has(iid) && !stack.has(iid)) return memo.get(iid);
     const it = db.items[iid];
     if (!it) return [];
-    const pr = priceOf(db, iid, source, traderLL);
+    const pr = priceOf(db, iid, source, traderLL, freshDurable);
     if (!pr) { excludedSet.add(iid); return []; }
     const p = db.props(iid);
     const [e0, r0] = modStats(p);
@@ -481,9 +497,11 @@ function frontier(db, gunId, opts) {
   const gun = db.items[gunId];
   // If the receiver itself cannot be sourced the build is impossible — pricing
   // it at 0 would silently make every build look cheaper than it is.
-  const gpr = priceOf(db, gunId, source, traderLL);
-  if (!gpr) return { error: `${db.name(gunId)} cannot be bought from the selected ` +
-    `source at these trader levels — raise a level or widen the source` };
+  const gpr = priceOf(db, gunId, source, traderLL, freshDurable);
+  if (!gpr) return { error: `${db.name(gunId)} cannot be bought` +
+    (freshDurable ? " from any trader at these levels — it carries durability, so " +
+      "100/100 can only be guaranteed by a trader. Untick 100/100 to allow flea." :
+      " from the selected source at these trader levels — raise a level or widen the source.") };
   let acc = [{ e: 0, r: 0, c: gpr[0], w: gun.weight || 0, b: { __src: gpr[1] },
                cf: new Set(gun.conflictingItems || []), cids: new Set() }];
   const slots = gp.slots || [];
@@ -678,6 +696,7 @@ function compute() {
     type: "frontier", mode: $("mode").value, gunId: $("gun").value,
     source: $("source").value, traderLL: traderLevels(),
     budget: +$("budget").value || null, usableMag: $("usableMag").checked,
+    freshDurable: $("freshDurable").checked,
   });
 }
 
@@ -1054,6 +1073,7 @@ function renderTree(nodes) {
 $("run").addEventListener("click", compute);
 $("usableMag").addEventListener("change", compute);
 $("source").addEventListener("change", compute);
+$("freshDurable").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
 $("floor").addEventListener("input", () => { if (points.length) drawChart(); });
