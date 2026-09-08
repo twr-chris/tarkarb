@@ -759,10 +759,32 @@ function computeBalance(idx, w) {
 let worker = null, points = [], selected = null, bootedMode = null, weaponInfo = null;
 let traderList = [];
 
+// Things that describe the player rather than the current question — trader
+// loyalty, economy, sourcing rules — persist between visits. The exploration
+// controls (budget, stat, colour-by, lean) deliberately do not.
+const PROFILE_KEY = "tarkarb.builder.profile";
+function loadProfile() {
+  try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || "{}") || {}; }
+  catch { return {}; }                       // private window, blocked storage
+}
+function saveProfile() {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify({
+      mode: $("mode").value,
+      source: $("source").value,
+      usableMag: $("usableMag").checked,
+      freshDurable: $("freshDurable").checked,
+      excludeOptics: $("excludeOptics").checked,
+      traders: traderLevels(),
+    }));
+  } catch { /* nothing to do if storage is unavailable */ }
+}
+
 // One loyalty dropdown per trader that actually sells weapon parts, discovered
 // from the data rather than hardcoded. Level 0 locks the trader out entirely.
 function buildTraderControls(traders) {
   traderList = traders;
+  const saved = loadProfile().traders || {};
   const host = $("traderctl");
   host.innerHTML = "";
   for (const t of traders) {
@@ -770,14 +792,16 @@ function buildTraderControls(traders) {
     lab.title = `${t.offers} weapon-part offers`;
     const sel = document.createElement("select");
     sel.dataset.trader = t.id;
+    const want = Object.prototype.hasOwnProperty.call(saved, t.id)
+      ? Math.min(+saved[t.id], t.max) : t.max;
     for (let l = 0; l <= t.max; l++) {
       const o = document.createElement("option");
       o.value = l; o.textContent = l === 0 ? "—" : l;
-      if (l === t.max) o.selected = true;
+      if (l === want) o.selected = true;
       sel.appendChild(o);
     }
     const mark = () => sel.classList.toggle("locked", sel.value === "0");
-    sel.addEventListener("change", () => { mark(); compute(); });
+    sel.addEventListener("change", () => { mark(); saveProfile(); compute(); });
     mark();
     lab.append(t.name + " ", sel);
     host.appendChild(lab);
@@ -1282,17 +1306,30 @@ function renderLocks() {
 }
 
 $("run").addEventListener("click", compute);
-$("usableMag").addEventListener("change", compute);
-$("source").addEventListener("change", compute);
-$("freshDurable").addEventListener("change", compute);
-$("excludeOptics").addEventListener("change", compute);
+$("usableMag").addEventListener("change", () => { saveProfile(); compute(); });
+$("source").addEventListener("change", () => { saveProfile(); compute(); });
+$("freshDurable").addEventListener("change", () => { saveProfile(); compute(); });
+$("excludeOptics").addEventListener("change", () => { saveProfile(); compute(); });
 $("clearLocks").addEventListener("click", () => { locks.clear(); renderLocks(); compute(); });
 $("gun").addEventListener("change", () => { locks.clear(); renderLocks(); });
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
 $("balW").addEventListener("input", () => { if (points.length) drawChart(); });
 $("floor").addEventListener("input", () => { if (points.length) drawChart(); });
-$("mode").addEventListener("change", () => { overlay("switching economy…"); bootWorker(); });
+$("mode").addEventListener("change", () => {
+  saveProfile(); overlay("switching economy…"); bootWorker();
+});
+
+// Restore the profile before booting: mode decides which economy the worker
+// downloads, so it has to be set first. Trader levels are applied later, when
+// buildTraderControls runs against the discovered trader list.
+(function restoreProfile() {
+  const p = loadProfile();
+  if (p.mode && [...$("mode").options].some(o => o.value === p.mode)) $("mode").value = p.mode;
+  if (p.source && [...$("source").options].some(o => o.value === p.source)) $("source").value = p.source;
+  for (const k of ["usableMag", "freshDurable", "excludeOptics"])
+    if (typeof p[k] === "boolean") $(k).checked = p[k];
+})();
 
 overlay("loading item data…");
 bootWorker();
