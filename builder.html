@@ -127,8 +127,9 @@
       to inspect that exact build. Frontier is beam-search approximate; prices are live (~5 min).
       Vertical and horizontal recoil scale by the same multiplier on every weapon (verified against
       all 393 in-game presets), so one recoil number ranks both — the diagram beside the selected
-      build shows the direction your build can't change. Note "horizontal" is the backward force
-      into the shoulder, not left-right sway, so it is shown as a bar rather than as screen width.</div>
+      build shows the direction your build can't change. Vertical and horizontal are separately
+      scaled parameters, not two components of one vector, so they appear as independent bars —
+      compare vertical across guns, or horizontal across guns, but not one against the other.</div>
   </section>
   <section id="buildbox">
     <h2>Selected build</h2>
@@ -566,13 +567,14 @@ function explainClusters(idx) {
 // only what is genuinely in the view plane: direction from recoilAngle
 // (90 deg = straight up) and spread from recoilDispersion.
 //
-// recoilVertical and recoilHorizontal are NOT two components of that vector.
-// They map to the game's RecoilForceUp / RecoilForceBack: "horizontal" is the
-// BACKWARD impulse into the shoulder, on the depth axis, not left-right on
-// screen. Proof it isn't in-plane: atan2(rv, rh) matches recoilAngle on 0 of
-// 171 weapons, the highest-"horizontal" guns are bolt-action rifles that
-// cannot spray sideways, and the flattest-shooting SMGs have the highest
-// rh/rv ratios. So they are shown as two magnitude bars, never as a shape.
+// recoilVertical and recoilHorizontal (game fields RecoilForceUp /
+// RecoilForceBack) are NOT two components of that vector and are NOT on a
+// shared scale, so they must not be drawn as one shape. Evidence: atan2(rv,
+// rh) matches recoilAngle on 0 of 171 weapons, and the population median
+// rh/rv is 2.52 — if the two were commensurable, essentially every gun in the
+// game would kick 2.5x harder sideways than up, which no player experiences.
+// Compare vertical across guns, or horizontal across guns; never one against
+// the other on the same gun. Hence two independently scaled bars.
 // All of angle/dispersion/base forces are weapon-level and unmodifiable; only
 // the magnitudes scale, by the build's recoil multiplier.
 const RV_MAX = 700, RH_MAX = 1250;      // game-wide ranges, for bar scaling
@@ -623,7 +625,7 @@ function drawPattern(rmul) {
   txt(cx, 13, `${angle}° kick · disp ${dispersion}`, 9, "#8b877c", "middle");
   txt(cx, cy + R + 13, rmul == null ? "stock recoil" : `${Math.round(m * 100)}% of stock`,
       9, "#8b877c", "middle");
-  // force magnitudes as bars — different axes, so never drawn as one shape
+  // force magnitudes as bars — not a shared scale, so never drawn as one shape
   const bar = (y, label, frac, val) => {
     txt(4, y + 7, label, 8, "#8b877c");
     svg.appendChild(el("rect", { x: 30, y, width: 96, height: 7, fill: "#2a2925", rx: 2 }));
@@ -631,8 +633,8 @@ function drawPattern(rmul) {
       fill: "#c6a55d", opacity: ".75", rx: 2 }));
     txt(130, y + 7, String(Math.round(val)), 8, "#8b877c");
   };
-  bar(cy + R + 24, "up", Math.min(1, baseRv * m / RV_MAX), baseRv * m);
-  bar(cy + R + 38, "back", Math.min(1, baseRh * m / RH_MAX), baseRh * m);
+  bar(cy + R + 24, "vert", Math.min(1, baseRv * m / RV_MAX), baseRv * m);
+  bar(cy + R + 38, "horiz", Math.min(1, baseRh * m / RH_MAX), baseRh * m);
 }
 
 function drawChart() {
