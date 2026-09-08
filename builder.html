@@ -143,6 +143,7 @@
   </label>
   <label class="ctl" title="Exclude magazines smaller than the gun's default trader magazine — no tiny-mag ergo cheese"><input id="usableMag" type="checkbox" checked> usable mag</label>
   <label class="ctl" title="Buy any part that has a durability rating from a trader, who always sells undamaged. A flea listing's condition is unknown and unknowable from this data — a cheap one is either worn or simply mispriced, and both look identical."><input id="freshDurable" type="checkbox" checked> 100/100</label>
+  <label class="ctl" title="Leave sights, optics, lights, lasers and sight mounts off. What optic you run depends on your engagement range, which the optimiser cannot know — left in, it fits absurd ones for incidental stat reasons. Fit your own in-game."><input id="excludeOptics" type="checkbox" checked> no optics</label>
   <button id="run">COMPUTE</button>
   <a href="index.html" style="margin-left:auto">← ARBITRAGE BOARD</a>
 </header>
@@ -290,6 +291,39 @@ async function loadDB(mode) {
 
 function modStats(p) { return [p.ergonomics || 0, p.recoilModifier || 0]; }
 
+// Sighting and tactical gear is an application decision, not a stats decision:
+// what optic you run depends on the range you fight at, which the optimiser
+// cannot know. Left in, it gets fitted for incidental reasons — on the MP5 the
+// best-recoil build carried a night-vision scope, two flashlights and three
+// accessory mounts for +85,529 RUB and -29 ergo while contributing NOTHING to
+// recoil (the gain came from the handguard and foregrip). Excluding it also
+// shrinks the search space so the beam is spent on parts that do matter.
+const SIGHT_TYPES = new Set(["ItemPropertiesScope", "ItemPropertiesNightVision",
+                             "ItemPropertiesThermalVision"]);
+const SIGHT_SLOT = /^mod_(scope|sight_front|sight_rear|tactical)/;
+const _pureMount = new Map();
+const isSightItem = (db, iid) => SIGHT_TYPES.has(db.props(iid).propertiesType);
+
+// A mount whose every destination is a sight exists only to hold one.
+function isPureSightMount(db, iid, depth) {
+  if (depth > 3) return false;
+  if (_pureMount.has(iid)) return _pureMount.get(iid);
+  _pureMount.set(iid, false);                       // cycle guard
+  const slots = db.props(iid).slots || [];
+  let any = false, ok = slots.length > 0;
+  for (const s of slots) {
+    for (const a of (s.filters || {}).allowedItems || []) {
+      any = true;
+      if (!isSightItem(db, a) && !isPureSightMount(db, a, depth + 1)) { ok = false; break; }
+    }
+    if (!ok) break;
+  }
+  const res = any && ok;
+  _pureMount.set(iid, res);
+  return res;
+}
+const isOptic = (db, iid) => isSightItem(db, iid) || isPureSightMount(db, iid, 0);
+
 function hasDurability(db, iid) {
   const it = db.items[iid] || {}, p = db.props(iid);
   return p.durability != null || p.maxDurability != null || it.maxDurability != null;
@@ -379,7 +413,7 @@ function defaultMagCap(db, gunId) {
 }
 
 function frontier(db, gunId, opts) {
-  const { source, traderLL, budget, usableMag, freshDurable } = opts;
+  const { source, traderLL, budget, usableMag, freshDurable, excludeOptics } = opts;
   const memo = new Map();
   const excludedSet = new Set();
   const minMagCap = usableMag ? defaultMagCap(db, gunId) : 0;
@@ -461,10 +495,13 @@ function frontier(db, gunId, opts) {
       allowed.some(id => db.props(id).propertiesType === "ItemPropertiesMagazine");
   }
 
-  function slotOptions(allowed, required, stack, magSlot) {
+  function slotOptions(allowed, required, stack, magSlot, slotName) {
+    if (excludeOptics && SIGHT_SLOT.test(slotName || ""))
+      return required ? [] : [null];              // leave sighting slots empty
     const raw = [];
     for (const cand of allowed) {
       if (!magOK(cand)) continue;
+      if (excludeOptics && isOptic(db, cand)) continue;
       for (const o of optionsFor(cand, stack))
         raw.push({ e: o.e, r: o.r, c: o.c, w: o.w, cand, o });
     }
@@ -490,7 +527,8 @@ function frontier(db, gunId, opts) {
     const st = new Set(stack); st.add(iid);
     for (const slot of p.slots || []) {
       const allowed = (slot.filters || {}).allowedItems || [];
-      const so = slotOptions(allowed, slot.required, st, isMagSlot(slot, allowed));
+      const so = slotOptions(allowed, slot.required, st, isMagSlot(slot, allowed),
+                             slot.nameId);
       if (slot.required && !so.length) return [];
       acc = merge(acc, slot.nameId || slot.id || "?", so, BEAM_MOD);
       if (!acc.length) return [];
@@ -515,7 +553,8 @@ function frontier(db, gunId, opts) {
     const slot = slots[i];
     postMessage({ type: "progress", msg: `solving ${slot.nameId} (${i + 1}/${slots.length})…` });
     const allowed = (slot.filters || {}).allowedItems || [];
-    const so = slotOptions(allowed, slot.required, new Set([gunId]), isMagSlot(slot, allowed));
+    const so = slotOptions(allowed, slot.required, new Set([gunId]),
+                           isMagSlot(slot, allowed), slot.nameId);
     if (slot.required && !so.length)
       return { error: `required slot ${slot.nameId} has no buyable parts under filters` };
     acc = merge(acc, slot.nameId || "?", so, BEAM_ROOT);
@@ -707,6 +746,7 @@ function compute() {
     source: $("source").value, traderLL: traderLevels(),
     budget: +$("budget").value || null, usableMag: $("usableMag").checked,
     freshDurable: $("freshDurable").checked,
+    excludeOptics: $("excludeOptics").checked,
   });
 }
 
@@ -1084,6 +1124,7 @@ $("run").addEventListener("click", compute);
 $("usableMag").addEventListener("change", compute);
 $("source").addEventListener("change", compute);
 $("freshDurable").addEventListener("change", compute);
+$("excludeOptics").addEventListener("change", compute);
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
 $("floor").addEventListener("input", () => { if (points.length) drawChart(); });
