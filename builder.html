@@ -118,16 +118,8 @@
       <option value="w">weight</option>
     </select>
   </label>
-  <label class="ctl">color by
-    <select id="colorBy">
-      <option value="">frontier</option>
-      <option value="mod_reciever">receiver</option>
-      <option value="mod_handguard">handguard</option>
-      <option value="mod_stock">stock</option>
-      <option value="mod_barrel">barrel</option>
-      <option value="mod_muzzle">muzzle</option>
-      <option value="mod_pistol_grip">grip</option>
-    </select>
+  <label class="ctl" title="Populated from the slots this weapon actually has; the number is how many different parts the builds use in that slot">color by
+    <select id="colorBy"><option value="">frontier</option></select>
   </label>
   <label class="ctl" title="Only show builds costing at least this much — a spend floor, applied to the computed frontier">min ₽ <input id="floor" type="number" value="0" step="50000"></label>
   <label class="ctl" title="Hard ceiling used during the search">max ₽ <input id="budget" type="number" value="600000" step="50000"></label>
@@ -579,6 +571,7 @@ function bootWorker() {
       overlay(null);
       if (m.error) { setStatus(`<span class="err">${m.error}</span>`); return; }
       points = m.points; selected = null; weaponInfo = m.weapon;
+      refreshColorBy();
       setStatus(`${m.gunName}: <span class="ok">${points.length} non-dominated builds</span> ` +
         `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable` +
         `${m.minMagCap ? ` · mag ≥ ${m.minMagCap}` : ""} · click the chart`);
@@ -606,8 +599,38 @@ const SLOT_LABEL = {
   mod_magazine: "magazine", mod_gas_block: "gas block", mod_scope: "scope",
   mod_foregrip: "foregrip", mod_charge: "charging handle", mod_mount: "mount",
   mod_sight_front: "front sight", mod_sight_rear: "rear sight", mod_tactical: "tactical",
+  mod_stock_000: "stock (on tube)", mod_muzzle_000: "muzzle (2nd)",
+  mod_mount_000: "mount (2nd)", mod_mount_001: "mount (3rd)",
+  mod_scope_000: "scope (2nd)", mod_bipod: "bipod", mod_launcher: "launcher",
+  mod_equipment: "equipment", mod_flashlight: "flashlight",
 };
-const slotLabel = s => SLOT_LABEL[s] || s.replace(/^mod_/, "").replace(/_/g, " ");
+const slotLabel = s => SLOT_LABEL[s] ||
+  s.replace(/^mod_/, "").replace(/_(\d+)$/, " $1").replace(/_/g, " ");
+
+// The colour-by list is derived from the slots this weapon actually has, not a
+// hardcoded guess: every slot whose part choice VARIES across the frontier is
+// offered, ranked by how many distinct parts appear in it (most variable
+// first), since a slot that never changes tells you nothing when coloured.
+function refreshColorBy() {
+  const sel = $("colorBy");
+  const prev = sel.value;
+  const distinct = {};
+  for (const p of points)
+    for (const [s, n] of Object.entries(p.slots))
+      (distinct[s] || (distinct[s] = new Set())).add(n);
+  const slots = Object.keys(distinct)
+    .filter(s => distinct[s].size > 1)
+    .sort((a, b) => distinct[b].size - distinct[a].size ||
+                    slotLabel(a).localeCompare(slotLabel(b)));
+  sel.innerHTML = '<option value="">frontier</option>';
+  for (const s of slots) {
+    const o = document.createElement("option");
+    o.value = s;
+    o.textContent = `${slotLabel(s)} (${distinct[s].size})`;
+    sel.appendChild(o);
+  }
+  sel.value = slots.includes(prev) ? prev : "";
+}
 
 // Find the dominant cost gap in the visible builds and name the slot(s) whose
 // part choice separates the bands. Automates "why is this clustered?".
