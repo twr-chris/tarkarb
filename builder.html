@@ -46,6 +46,24 @@
   #lockbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
     padding: 7px 20px; background: #241f14; border-bottom: 1px solid var(--gold); }
   #lockbar[hidden] { display: none; }
+  #lockSearchWrap { position: relative; display: inline-block; }
+  #lockSearch { background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px;
+    font: 12px var(--mono); width: 230px; }
+  #lockSearch:focus { outline: none; border-color: var(--gold); }
+  #lockResults { position: absolute; z-index: 30; top: calc(100% + 3px); left: 0;
+    min-width: 340px; max-height: 300px; overflow-y: auto; background: var(--panel);
+    border: 1px solid var(--gold); border-radius: 3px;
+    box-shadow: 0 6px 18px #000a; }
+  #lockResults[hidden] { display: none; }
+  .lockopt { display: block; width: 100%; text-align: left; background: none;
+    border: 0; border-bottom: 1px solid #23221e; padding: 5px 9px; cursor: pointer;
+    font: 12px var(--mono); color: var(--text); }
+  .lockopt:last-child { border-bottom: 0; }
+  .lockopt:hover, .lockopt.sel { background: var(--panel2); color: var(--gold); }
+  .lockopt .slot { color: var(--dim); }
+  .lockopt .on { color: var(--gold); }
+  .lockempty { padding: 6px 9px; font: 12px var(--mono); color: var(--dim); }
   #lockctl { display: flex; flex-wrap: wrap; gap: 6px; }
   .lockchip { display: inline-flex; align-items: center; gap: 6px;
     background: var(--panel); border: 1px solid var(--gold); border-radius: 3px;
@@ -174,10 +192,16 @@
   <span id="traderctl"></span>
 </div>
 
-<div id="lockbar" hidden>
-  <span class="tb-label">locked parts</span>
+<div id="lockbar">
+  <span class="tb-label">lock a part</span>
+  <span id="lockSearchWrap">
+    <input id="lockSearch" type="search" autocomplete="off" spellcheck="false"
+           placeholder="type any part name…"
+           title="Find a part by name and lock it. Every build in the frontier will then use it.">
+    <div id="lockResults" hidden></div>
+  </span>
   <span id="lockctl"></span>
-  <button id="clearLocks" class="linkish">clear all</button>
+  <button id="clearLocks" class="linkish" hidden>clear all</button>
 </div>
 
 <div id="status">booting worker…</div>
@@ -689,6 +713,26 @@ function frontier(db, gunId, opts) {
               baseRv: baseV, baseRh: baseH } };
 }
 
+// Every part reachable from this weapon, with the slot it lands in, so the UI
+// can offer a search instead of making people hunt a dot on the chart that
+// happens to contain the part they already know they want.
+function partIndex(db, gunId, excludeOptics) {
+  const out = new Map(), seen = new Set([gunId]), stack = [gunId];
+  while (stack.length) {
+    const iid = stack.pop();
+    for (const slot of db.props(iid).slots || []) {
+      const nid = slot.nameId || "?";
+      if (excludeOptics && SIGHT_SLOT.test(nid)) continue;
+      for (const a of (slot.filters || {}).allowedItems || []) {
+        if (excludeOptics && isOptic(db, a)) continue;
+        if (!out.has(a)) out.set(a, { id: a, name: db.name(a), slot: nid });
+        if (!seen.has(a)) { seen.add(a); stack.push(a); }
+      }
+    }
+  }
+  return [...out.values()].sort((x, y) => x.name.localeCompare(y.name));
+}
+
 onmessage = async ev => {
   const m = ev.data;
   try {
@@ -713,6 +757,9 @@ onmessage = async ev => {
       const traders = Object.values(sellers).sort((a, b) => b.offers - a.offers);
       const v = validate(db);
       postMessage({ type: "boot", weapons, validate: v, traders });
+    } else if (m.type === "parts") {
+      postMessage({ type: "parts", gunId: m.gunId,
+                    parts: partIndex(db, m.gunId, m.excludeOptics) });
     } else if (m.type === "frontier") {
       const t0 = performance.now();
       const res = frontier(db, m.gunId, m);
@@ -837,11 +884,16 @@ function bootWorker() {
       sel.value = "5447a9cd4bdc2dbd208b4567";           // Colt M4A1
       if (!sel.value) sel.selectedIndex = 0;
       buildTraderControls(m.traders || []);
+      requestParts();
       const v = m.validate;
       setStatus(`stat model self-test vs in-game presets: ` +
         `<span class="${v.passed === v.total ? "ok" : "err"}">${v.passed}/${v.total} exact</span>` +
         ` · pick a gun and COMPUTE`);
       overlay(null);
+      return;
+    }
+    if (m.type === "parts") {
+      if (m.gunId === $("gun").value) partList = m.parts || [];
       return;
     }
     if (m.type === "frontier") {
@@ -1288,9 +1340,49 @@ function toggleLock(id, name) {
   compute();
 }
 
+// searchable part list for the current gun, refreshed by the worker
+let partList = [];
+function requestParts() {
+  if (!worker || !$("gun").value) return;
+  worker.postMessage({ type: "parts", mode: $("mode").value,
+                       gunId: $("gun").value, excludeOptics: $("excludeOptics").checked });
+}
+
+const esc = t => String(t).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+let searchSel = 0;
+function runSearch() {
+  const q = $("lockSearch").value.trim().toLowerCase();
+  const box = $("lockResults");
+  if (q.length < 2) { box.hidden = true; box.innerHTML = ""; return; }
+  const hits = partList.filter(p => p.name.toLowerCase().includes(q)).slice(0, 14);
+  box.innerHTML = "";
+  if (!hits.length) {
+    box.innerHTML = `<div class="lockempty">no part matches "${esc(q)}"</div>`;
+    box.hidden = false; return;
+  }
+  searchSel = Math.min(searchSel, hits.length - 1);
+  hits.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "lockopt" + (i === searchSel ? " sel" : "");
+    const on = locks.has(p.id);
+    b.innerHTML = `<span class="slot">${slotLabel(p.slot)}</span> · ` +
+      `${on ? '<span class="on">🔒 </span>' : ""}${esc(p.name)}`;
+    b.addEventListener("mousedown", e => {         // mousedown beats input blur
+      e.preventDefault();
+      toggleLock(p.id, p.name);
+      $("lockSearch").value = ""; box.hidden = true; box.innerHTML = "";
+    });
+    box.appendChild(b);
+  });
+  box.hidden = false;
+}
+
 function renderLocks() {
-  const bar = $("lockbar"), host = $("lockctl");
-  bar.hidden = locks.size === 0;
+  const host = $("lockctl");
+  $("clearLocks").hidden = locks.size === 0;
   host.innerHTML = "";
   for (const [id, name] of locks) {
     const chip = document.createElement("span");
@@ -1309,9 +1401,28 @@ $("run").addEventListener("click", compute);
 $("usableMag").addEventListener("change", () => { saveProfile(); compute(); });
 $("source").addEventListener("change", () => { saveProfile(); compute(); });
 $("freshDurable").addEventListener("change", () => { saveProfile(); compute(); });
-$("excludeOptics").addEventListener("change", () => { saveProfile(); compute(); });
+$("excludeOptics").addEventListener("change", () => {
+  saveProfile(); requestParts(); compute();
+});
+
+$("lockSearch").addEventListener("input", () => { searchSel = 0; runSearch(); });
+$("lockSearch").addEventListener("focus", runSearch);
+$("lockSearch").addEventListener("blur", () => {
+  setTimeout(() => { $("lockResults").hidden = true; }, 120);
+});
+$("lockSearch").addEventListener("keydown", e => {
+  const opts = [...$("lockResults").querySelectorAll(".lockopt")];
+  if (e.key === "Escape") { $("lockResults").hidden = true; $("lockSearch").blur(); return; }
+  if (!opts.length) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); searchSel = (searchSel + 1) % opts.length; runSearch(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); searchSel = (searchSel - 1 + opts.length) % opts.length; runSearch(); }
+  else if (e.key === "Enter") { e.preventDefault(); opts[searchSel]
+    .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true })); }
+});
 $("clearLocks").addEventListener("click", () => { locks.clear(); renderLocks(); compute(); });
-$("gun").addEventListener("change", () => { locks.clear(); renderLocks(); });
+$("gun").addEventListener("change", () => {
+  locks.clear(); renderLocks(); $("lockSearch").value = ""; requestParts();
+});
 $("stat").addEventListener("change", drawChart);
 $("colorBy").addEventListener("change", drawChart);
 $("balW").addEventListener("input", () => { if (points.length) drawChart(); });
@@ -1331,6 +1442,7 @@ $("mode").addEventListener("change", () => {
     if (typeof p[k] === "boolean") $(k).checked = p[k];
 })();
 
+renderLocks();
 overlay("loading item data…");
 bootWorker();
 </script>
