@@ -130,10 +130,11 @@
     <select id="mode"><option value="pve" selected>PVE</option>
       <option value="regular">PVP</option><option value="pvp-season">PVP-S</option></select>
   </label>
-  <label class="ctl" title="Per minute assumes you restart every craft the moment it finishes. Overnight assumes you start one craft per station before bed and collect it 8 hours later.">rank by
+  <label class="ctl" title="Per minute assumes you restart every craft the moment it finishes. Overnight and daily assume you start one craft per station and collect it 8 or 24 hours later.">rank by
     <select id="horizon">
       <option value="minute" selected>₽ per minute</option>
       <option value="night">overnight (8 h)</option>
+      <option value="day">daily (24 h)</option>
     </select>
   </label>
   <label class="ctl" title="Which flea number to trust, for buying inputs and selling outputs. The lowest listing is what you'd see and have to beat right now; the 24h average moves less, and forecasts better for a craft that finishes hours from now.">flea price
@@ -200,8 +201,8 @@
     <summary>How the numbers are made</summary>
     <div class="legend-body">
       <p class="lead"><b>Profit</b> = what the output sells for − what the inputs cost. Ranked
-      <b>per minute</b>, it's divided by craft time; ranked <b>overnight</b>, it's what one craft
-      banks in 8 hours. Here is how each piece is decided.</p>
+      <b>per minute</b>, it's divided by craft time; ranked <b>overnight</b> or <b>daily</b>, it's
+      what one craft banks in 8 or 24 hours. Here is how each piece is decided.</p>
       <table class="legend-table">
         <tr><th>Selling</th><td>The better of the best unlocked trader and the flea market after
           its listing fee. The fee is Tarkov's
@@ -230,12 +231,12 @@
           slots.</td></tr>
         <tr><th>Bitcoin farm</th><td>Base time ÷ (1 + 0.041225 × (graphics cards − 1)). Crafting
           skill doesn't speed it up, and the cards aren't consumed.</td></tr>
-        <tr><th>Overnight</th><td>Nobody's awake to restart anything, so each station slot runs
-          exactly one craft, started before bed and collected 8 hours later. A recipe is worth that
-          one craft's profit if it finishes within 8 hours (after Crafting), and nothing if it's
-          still running when you wake, so longer recipes drop out. The bitcoin farm is the
-          exception: it mines around the clock without you, so it's credited 8 hours of
-          production.</td></tr>
+        <tr><th>Overnight &amp; daily</th><td>Nobody's around to restart anything, so each station
+          slot runs exactly one craft, started before you go and collected 8 or 24 hours later. A
+          recipe is worth that one craft's profit if it finishes inside the window (after Crafting),
+          and nothing if it's still running when you're back, so longer recipes drop out. The
+          bitcoin farm is the exception: it mines around the clock without you, so it's credited
+          the whole window's production.</td></tr>
         <tr><th>Tools &amp; weapons</th><td>Tools come back when the craft finishes, so they cost
           nothing per craft; you just need to own one. A recipe that wants a <i>functional</i>
           weapon is priced at that weapon's default preset, since a bare receiver won't
@@ -284,7 +285,14 @@ const CRAFT_CUT_PER_LEVEL = 0.0075;   // Crafting: −0.75% craft time per level
 const CRAFT_CUT_LEVELS = 50;          // …bottoming out at −37.5%
 const ELITE = 51;
 const GPU_BOOST = 0.041225;           // bitcoin farm speed-up per card past the first
-const NIGHT_SECS = 8 * 3600;          // overnight: one craft per slot, collected at dawn
+// Away windows: nobody restarts anything, so each slot runs one craft that is
+// collected when you're back.
+const AWAY = {
+  night: { hours: 8,  label: "overnight", sub: "— what to start before bed",
+           back: "when you wake", col: "₽ by morning", per: "₽ / night" },
+  day:   { hours: 24, label: "daily", sub: "— what to start before a day away",
+           back: "when you're back", col: "₽ by tomorrow", per: "₽ / day" },
+};
 const AREA = { workbench: 10, lavatory: 2, nutrition: 8, medstation: 7, intel: 11, bitcoin: 20 };
 // elite Crafting runs two different recipes at once in these
 const TWIN_AREAS = new Set([AREA.workbench, AREA.lavatory, AREA.nutrition,
@@ -495,12 +503,14 @@ function evaluate(S) {
     row.revenue = row.sale.unit * out.count;
     row.profit = row.revenue - row.cost;
     row.ppm = row.profit / (row.secs / 60);
-    // Overnight nobody restarts anything: a craft banks its profit once if it
-    // finishes inside the window, and nothing if it's still running at dawn.
-    // The farm is the exception — it mines around the clock regardless.
-    row.night = row.bitcoin ? row.ppm * NIGHT_SECS / 60
-              : row.secs <= NIGHT_SECS ? row.profit : null;
-    if (S.overnight && row.night === null) { res.tooLong++; continue; }
+    // Away, nobody restarts anything: a craft banks its profit once if it
+    // finishes inside the window, and nothing if it's still running when you're
+    // back. The farm is the exception — it mines around the clock regardless.
+    if (S.away) {
+      const win = S.away.hours * 3600;
+      row.banked = row.bitcoin ? row.ppm * win / 60 : row.secs <= win ? row.profit : null;
+      if (row.banked === null) { res.tooLong++; continue; }
+    }
     res.rows.push(row);
   }
   res.rows.sort((a, b) => scoreOf(b, S) - scoreOf(a, S));
@@ -508,7 +518,7 @@ function evaluate(S) {
   return res;
 }
 
-const scoreOf = (row, S) => S.overnight ? row.night : row.ppm;
+const scoreOf = (row, S) => S.away ? row.banked : row.ppm;
 
 // One craft per station — two different ones at elite Crafting in the twin
 // areas — taking the best profitable recipes.
@@ -548,18 +558,18 @@ function recipeLabel(row) {
 }
 
 function renderQueue(queue, S) {
-  // overnight, one craft's profit is the night's take, so a single column says it
-  const night = S.overnight, cols = night ? 4 : 6;
-  const rate = (p, v) => night ? `<td class="ppm">${fmt(v)}</td>`
+  // away, one craft's profit is the whole take, so a single column says it
+  const away = S.away, cols = away ? 4 : 6;
+  const rate = (p, v) => away ? `<td class="ppm">${fmt(v)}</td>`
     : `${p ? `<td class="pos">${fmt(p.profit)}</td>` : ""}<td class="ppm">${fmt(v)}</td><td>${fmt(v * 60)}</td>`;
   let total = 0;
   let h = `<tr><th class="l">station</th><th class="l">run this</th><th>time</th>
-    ${night ? "<th>₽ by morning</th>" : "<th>profit / craft</th><th>₽ / min</th><th>₽ / hour</th>"}</tr>`;
+    ${away ? `<th>${away.col}</th>` : "<th>profit / craft</th><th>₽ / min</th><th>₽ / hour</th>"}</tr>`;
   for (const { st, picks } of queue) {
     const name = `${esc(st.name)} <span class="lvl">${S.levels[st.id]}</span>`;
     if (!picks.length) {
       h += `<tr class="idle"><td class="l">${name}</td><td class="l" colspan="${cols - 1}">nothing
-        ${night ? "that finishes overnight " : ""}turns a profit here — leave it idle</td></tr>`;
+        ${away ? `that finishes within ${away.hours} h ` : ""}turns a profit here — leave it idle</td></tr>`;
       continue;
     }
     picks.forEach((p, i) => {
@@ -569,7 +579,7 @@ function renderQueue(queue, S) {
     });
   }
   if (!queue.length) h += `<tr class="idle"><td class="l" colspan="${cols}">no crafting stations built</td></tr>`;
-  else h += `<tr class="total"><td class="l" colspan="${night ? 3 : 4}">all of it together
+  else h += `<tr class="total"><td class="l" colspan="${away ? 3 : 4}">all of it together
       <span class="dim">— before generator fuel</span></td>${rate(null, total)}</tr>`;
   $("queue").innerHTML = h;
 }
@@ -614,11 +624,11 @@ function detail(row, S) {
     ${+(Math.min(S.craft, CRAFT_CUT_LEVELS) * CRAFT_CUT_PER_LEVEL * 100).toFixed(2)}% Crafting)</span>`;
   h += `<div>${fmt(row.revenue)} − ${fmt(row.cost)} = <b>${fmt(row.profit)}</b> per craft,
     ÷ ${time} = <b class="${row.ppm > 0 ? "pick" : ""}">${fmt(row.ppm)} ₽/min</b></div>`;
-  if (S.overnight) h += row.bitcoin
-    ? `<div>overnight: the farm keeps mining while you sleep, ${fmt(row.ppm)} ₽/min × 8 h =
-        <b class="pick">${fmt(row.night)}</b></div>`
-    : `<div>overnight: one craft, done with ${fmtDur(NIGHT_SECS - row.secs)} to spare =
-        <b class="${row.night > 0 ? "pick" : ""}">${fmt(row.night)}</b></div>`;
+  if (S.away) h += row.bitcoin
+    ? `<div>${S.away.label}: the farm keeps mining while you're away, ${fmt(row.ppm)} ₽/min ×
+        ${S.away.hours} h = <b class="pick">${fmt(row.banked)}</b></div>`
+    : `<div>${S.away.label}: one craft, done with ${fmtDur(S.away.hours * 3600 - row.secs)} to spare =
+        <b class="${row.banked > 0 ? "pick" : ""}">${fmt(row.banked)}</b></div>`;
   return h + `</div>`;
 }
 
@@ -638,8 +648,8 @@ function renderRanked() {
       .join("\n").toLowerCase().includes(q);
   });
   let h = `<tr><th class="l">#</th><th class="l">makes</th><th class="l">station</th><th>time</th>
-    <th>inputs</th><th>sells for</th>${S.overnight ? "<th>₽ / night</th>" : "<th>profit</th><th>₽ / min</th>"}</tr>`;
-  const cols = S.overnight ? 7 : 8;
+    <th>inputs</th><th>sells for</th>${S.away ? `<th>${S.away.per}</th>` : "<th>profit</th><th>₽ / min</th>"}</tr>`;
+  const cols = S.away ? 7 : 8;
   for (const row of rows) {
     const id = row.r.id, open = openRows.has(id);
     h += `<tr class="rec${open ? " open" : ""}" data-id="${esc(id)}" tabindex="0">
@@ -649,7 +659,7 @@ function renderRanked() {
       <td>${fmtDur(row.secs)}</td>
       <td>${fmt(row.cost)}</td>
       <td><span class="where">${esc(row.sale.where)}</span> ${fmt(row.revenue)}</td>
-      ${S.overnight ? "" : `<td class="${row.profit > 0 ? "pos" : "neg"}">${fmt(row.profit)}</td>`}
+      ${S.away ? "" : `<td class="${row.profit > 0 ? "pos" : "neg"}">${fmt(row.profit)}</td>`}
       <td class="${scoreOf(row, S) > 0 ? "ppm" : "neg"}">${fmt(scoreOf(row, S))}</td></tr>`;
     if (open) h += `<tr class="detail"><td colspan="${cols}">${detail(row, S)}</td></tr>`;
   }
@@ -796,7 +806,7 @@ function settings() {
     source: $("source").value,
     sellFlea: $("sellFlea").checked,
     taskLocked: $("taskLocked").checked,
-    overnight: $("horizon").value === "night",
+    away: AWAY[$("horizon").value] || null,
   };
   S.feeCut = feeCut(S);
   return S;
@@ -813,18 +823,19 @@ function compute() {
   const S = settings();
   const res = evaluate(S);
   last = { S, res };
-  $("queueSub").textContent = S.overnight ? "— what to start before bed"
-                                          : "— what each station should be running";
-  $("queueHint").textContent = S.overnight
-    ? "Nobody's awake to restart anything overnight, so each station gets exactly one craft: the most "
-      + "profitable one that finishes within 8 hours. The bitcoin farm keeps mining regardless, so it's "
-      + "credited 8 hours of production. Recipes that lose money are never suggested."
+  const away = S.away;
+  $("queueSub").textContent = away ? away.sub : "— what each station should be running";
+  $("queueHint").textContent = away
+    ? `Nobody's around to restart anything, so each station gets exactly one craft: the most `
+      + `profitable one that finishes within ${away.hours} hours. The bitcoin farm keeps mining `
+      + `regardless, so it's credited ${away.hours} hours of production. Recipes that lose money are `
+      + `never suggested.`
     : "Every station runs one craft at a time, so this is the most profitable recipe per station and what "
       + "they earn together, restarting each craft as it finishes. Recipes that lose money are never "
       + "suggested; a station with nothing profitable should sit idle.";
-  $("rankHint").textContent = (S.overnight
-    ? "Ranked by what one craft banks before morning. Recipes longer than 8 hours are left out; they'd "
-      + "still be running when you wake."
+  $("rankHint").textContent = (away
+    ? `Ranked by what one craft banks before you're back. Recipes longer than ${away.hours} hours `
+      + `are left out; they'd still be running ${away.back}.`
     : "Ranked by profit per minute of craft time.")
     + " Click a recipe for where every input comes from and where the output sells.";
   renderQueue(bestQueue(res, S), S);
@@ -836,7 +847,7 @@ function compute() {
   if (res.locked) bits.push(`${res.locked} need a higher station level`);
   if (res.taskHidden) bits.push(`${res.taskHidden} task-locked recipes hidden`);
   if (res.noCards) bits.push(`bitcoin farm has no cards`);
-  if (res.tooLong) bits.push(`${res.tooLong} take longer than 8 h`);
+  if (res.tooLong) bits.push(`${res.tooLong} take longer than ${away.hours} h`);
   bits.push(`${res.questOnly} one-off quest crafts left out`);
   if (S.feeCut) bits.push(`flea fee −${+(S.feeCut * 100).toFixed(1)}%`);
   bits.push(`${DB.mode === "regular" ? "PVP" : DB.mode.toUpperCase()} prices via tarkov.dev`);
