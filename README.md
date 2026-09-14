@@ -6,6 +6,17 @@ pocket the spread — flea buyers pay no fee and traders take non-FIR items).
 
 **Live board:** https://twr-chris.github.io/tarkarb/
 
+Also on the site:
+
+- **[Gun builder](https://twr-chris.github.io/tarkarb/builder.html)** — the
+  cost-vs-stat efficient frontier for any weapon: the cheapest build reaching
+  each level of recoil, ergonomics, or a balance of both.
+- **[Hideout](https://twr-chris.github.io/tarkarb/hideout.html)** — enter your
+  station levels, skills and trader loyalty; every recipe you can craft is
+  priced (inputs from traders or flea, output to the best trader or the flea
+  after its fee) and ranked by profit per minute, with the best recipe to keep
+  running at each station.
+
 ## What it shows
 
 - **CONVEYOR** — items whose flea price is pinned to the vendor price (24h avg

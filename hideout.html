@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TARKARB Hideout — Crafting Profit per Minute</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚗️</text></svg>">
+<style>
+  :root {
+    --bg: #131312; --panel: #1c1b19; --panel2: #232220; --line: #33312c;
+    --text: #d6d2c8; --dim: #8b877c; --gold: #c6a55d; --green: #7fb069;
+    --red: #b06969; --blue: #9db4c9; --mono: "Cascadia Code", Consolas, "SF Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--dim); }
+  a:hover { color: var(--gold); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+           padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0 6px 0 0; letter-spacing: 3px; color: var(--gold); font-weight: 600; }
+  header h1 span { color: var(--dim); font-weight: 400; letter-spacing: 0; font-size: 12px; margin-left: 8px; }
+  .ctl { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim);
+         text-transform: uppercase; letter-spacing: 1px; }
+  .ctl input, .ctl select { background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 12px var(--mono); }
+  .ctl input[type=number] { width: 64px; }
+  .ctl input[type=checkbox] { accent-color: var(--gold); }
+  nav.pages { margin-left: auto; display: flex; gap: 14px; font-size: 12px; letter-spacing: 1px; }
+  nav.pages .here { color: var(--gold); }
+
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+    padding: 7px 20px; background: var(--panel2); border-bottom: 1px solid var(--line); }
+  .bar .tb-label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  .bar .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+  .bar .group { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+  .bar label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text); }
+  .bar select, .bar input { background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; font: 12px var(--mono); }
+  .bar input[type=number] { width: 52px; }
+  .bar select.locked { color: var(--red); }
+  .bar .unit { color: var(--dim); font-size: 11px; }
+
+  #status { padding: 7px 20px; color: var(--dim); font: 12px var(--mono); min-height: 18px; }
+  #status .ok { color: var(--green); } #status .err { color: var(--red); }
+
+  main { padding: 0 20px 50px; max-width: 1400px; margin: 0 auto; }
+  h2 { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: var(--gold);
+       border-bottom: 1px solid var(--line); padding-bottom: 6px; margin: 22px 0 4px; }
+  h2 small { color: var(--dim); letter-spacing: 1px; text-transform: none; font-weight: 400; }
+  .hint { color: var(--dim); font-size: 12px; margin: 4px 0 10px; max-width: 1000px; }
+
+  .tablewrap { overflow-x: auto; }
+  table.grid { border-collapse: collapse; width: 100%; font: 12px var(--mono); }
+  table.grid th { text-align: right; color: var(--dim); font-weight: 400; font-size: 11px;
+    letter-spacing: 1px; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.grid td { padding: 5px 10px; text-align: right; border-bottom: 1px solid #23221e; white-space: nowrap; }
+  table.grid th.l, table.grid td.l { text-align: left; }
+  table.grid td.item { text-align: left; white-space: normal; min-width: 260px; }
+  table.grid tr.rec { cursor: pointer; }
+  table.grid tr.rec:hover td, table.grid tr.rec:focus td { background: #1e1d1a; outline: none; }
+  table.grid tr.rec.open td { background: #201f1b; border-bottom-color: transparent; }
+  table.grid td.rank { color: var(--dim); }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+  .ppm { color: var(--gold); font-weight: 600; }
+  .dim { color: var(--dim); }
+  .lvl { color: var(--dim); }
+  .where { color: var(--blue); }
+  .badge { display: inline-block; font-size: 10px; letter-spacing: .5px; color: var(--dim);
+    border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; margin-left: 6px;
+    vertical-align: 1px; white-space: nowrap; }
+  .badge.task { color: var(--gold); border-color: #5a4b2b; }
+  .badge.warn { color: var(--red); border-color: #5a3434; }
+  tr.idle td { color: var(--dim); }
+  tr.total td { border-top: 1px solid var(--line); border-bottom: 0; padding-top: 8px; }
+  tr.total td.l { color: var(--text); }
+  .twin { color: var(--dim); }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 8px 0; }
+  #filter { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 3px; padding: 4px 8px; font: 12px var(--mono); width: 260px; }
+  #filter:focus { outline: none; border-color: var(--gold); }
+
+  tr.detail td { background: #201f1b; text-align: left; padding: 2px 10px 14px 44px; white-space: normal; }
+  .det { font: 12px/1.6 var(--mono); color: var(--dim); }
+  .det table { border-collapse: collapse; margin: 4px 0 8px; }
+  .det th { text-align: left; font-weight: 400; font-size: 11px; color: var(--dim);
+    padding: 2px 18px 2px 0; border-bottom: 1px solid var(--line); }
+  .det th.num { text-align: right; }
+  .det td { padding: 3px 18px 3px 0; color: var(--text); vertical-align: top; }
+  .det td.num { text-align: right; }
+  .det tr.sum td { border-top: 1px solid var(--line); color: var(--dim); }
+  .det .pick { color: var(--gold); font-weight: 600; }
+  .det b { color: var(--text); }
+  .det .warn { color: var(--red); }
+  .det .note { color: var(--dim); font-size: 11px; }
+  .det > div { margin: 3px 0; }
+
+  details.box { margin-top: 22px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 14px; }
+  details.box summary { cursor: pointer; padding: 9px 2px; font-size: 12px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--gold); font-weight: 600; }
+  details.box summary:hover { color: var(--text); }
+  .legend-body { padding: 4px 2px 14px; max-width: 1000px; }
+  .legend-body p { margin: 10px 0; color: var(--dim); font-size: 13px; line-height: 1.6; }
+  .legend-body p.lead { color: var(--text); }
+  .legend-body b { color: var(--text); }
+  .legend-body code { font: 12px var(--mono); color: var(--blue); }
+  .legend-table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  .legend-table th { text-align: left; vertical-align: top; padding: 8px 14px 8px 0;
+    color: var(--gold); font: 12px var(--mono); font-weight: 600; white-space: nowrap;
+    border-bottom: 1px solid #23221e; }
+  .legend-table td { padding: 8px 0; color: var(--dim); font-size: 13px; line-height: 1.6;
+    border-bottom: 1px solid #23221e; }
+  .legend-body .src { font-size: 12px; }
+
+  footer { padding: 20px; color: var(--dim); font-size: 11px; text-align: center; }
+  #overlay { position: fixed; inset: 0; background: #131312cc; display: none;
+             align-items: center; justify-content: center; z-index: 20; }
+  #overlay div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 22px 30px; font: 13px var(--mono); color: var(--gold); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TARKARB HIDEOUT<span>crafting, ranked by ₽ per minute</span></h1>
+  <label class="ctl">mode
+    <select id="mode"><option value="pve" selected>PVE</option>
+      <option value="regular">PVP</option><option value="pvp-season">PVP-S</option></select>
+  </label>
+  <label class="ctl" title="Which flea number to trust, for buying inputs and selling outputs. The lowest listing is what you'd see and have to beat right now; the 24h average moves less, and forecasts better for a craft that finishes hours from now.">flea price
+    <select id="basis">
+      <option value="low" selected>lowest listing</option>
+      <option value="avg">24h average</option>
+    </select>
+  </label>
+  <label class="ctl" title="A flea price backed by fewer listings than this is not trusted as a sale price: a single listing is an asking price, not a market. Inputs still use it, since it's the only price there is, and get flagged.">min listings <input id="minOffers" type="number" value="5" min="0" step="1"></label>
+  <label class="ctl" title="Where inputs may be bought">buy from
+    <select id="source">
+      <option value="both" selected>flea + traders</option>
+      <option value="trader">traders only</option>
+      <option value="flea">flea only</option>
+    </select>
+  </label>
+  <label class="ctl" title="Allow selling outputs on the flea market, after its listing fee. Off = traders only, e.g. below flea access level."><input id="sellFlea" type="checkbox" checked> sell on flea</label>
+  <label class="ctl" title="Count things a task has to unlock as available: recipes, and trader offers for their inputs. Either way the task is named on the recipe."><input id="taskLocked" type="checkbox" checked> task unlocks</label>
+  <nav class="pages"><a href="index.html">ARBITRAGE</a><a href="builder.html">GUN BUILDER</a><span class="here">HIDEOUT</span></nav>
+</header>
+
+<div class="bar" title="Your built level of each station that crafts anything; — means not built">
+  <span class="tb-label">stations</span>
+  <span class="group" id="stationctl"></span>
+  <span class="sep"></span>
+  <span class="tb-label">skills</span>
+  <span class="group">
+    <label title="Crafting cuts craft time 0.75% per level, down to −37.5%. Elite (51) also lets the Workbench, Lavatory, Nutrition Unit, Medstation and Intelligence Center run two different recipes at once.">Crafting <input id="craftSkill" type="number" min="0" max="51" value="0"></label>
+    <label title="Strengthens Intelligence Center 3's flea fee discount by 1% per level">Hideout Mgmt <input id="hmSkill" type="number" min="0" max="51" value="0"></label>
+  </span>
+</div>
+
+<div class="bar" title="Your loyalty level with each trader that sells an input or buys an output; — means locked out entirely">
+  <span class="tb-label">trader levels</span>
+  <span class="group" id="traderctl"></span>
+</div>
+
+<div id="status">loading…</div>
+
+<main>
+  <h2>Your best queue <small>— what each station should be running</small></h2>
+  <div class="hint">Every station runs one craft at a time, so this is the most profitable recipe
+    per station and what they earn together, restarting each craft as it finishes. Recipes that lose
+    money are never suggested; a station with nothing profitable should sit idle.</div>
+  <div class="tablewrap"><table class="grid" id="queue"></table></div>
+
+  <h2>Every recipe you can craft <small id="rankSub"></small></h2>
+  <div class="filters">
+    <input id="filter" type="search" autocomplete="off" spellcheck="false"
+           placeholder="filter by item, input or station…">
+    <label class="ctl">station <select id="stationFilter"><option value="">all</option></select></label>
+    <label class="ctl"><input id="hideLosers" type="checkbox"> hide money-losers</label>
+  </div>
+  <div class="hint">Ranked by profit per minute of craft time. Click a recipe for where every
+    input comes from and where the output sells.</div>
+  <div class="tablewrap"><table class="grid" id="ranked"></table></div>
+
+  <details class="box" id="unvaluedBox">
+    <summary>Can't be valued <span id="unvaluedCount"></span></summary>
+    <div class="hint">Recipes with an input you can't get under your settings, or an output
+      nothing will buy — mostly crates that open into random loot. Ranking them at zero would be
+      a guess, so they sit here instead.</div>
+    <div class="tablewrap"><table class="grid" id="unvalued"></table></div>
+  </details>
+
+  <details class="box">
+    <summary>How the numbers are made</summary>
+    <div class="legend-body">
+      <p class="lead"><b>Profit per minute</b> = (what the output sells for − what the inputs
+      cost) ÷ craft time. Here is how each of those three is decided.</p>
+      <table class="legend-table">
+        <tr><th>Selling</th><td>The better of the best unlocked trader and the flea market after
+          its listing fee. The fee is Tarkov's
+          <code>V₀·Ti·4<sup>P₀</sup> + Vʀ·Tr·4<sup>Pʀ</sup></code> at this economy's rates
+          (<span id="lgRates">5% / 5%</span>), cut 30% by Intelligence Center 3 and strengthened
+          further by Hideout Management. The fee climbs steeply once you list above an item's base
+          price, so lower list prices are tried too and whichever nets the most is used.
+          Sometimes undercutting pays for itself.</td></tr>
+        <tr><th>Buying</th><td>The cheapest trader offer your loyalty allows, filled up to its
+          per-restock limit, then the flea for the rest. Trader offers that a task has to unlock
+          count only while <b>task unlocks</b> is ticked. If every usable offer is limited, the remainder is priced at the dearest of
+          them — buying across restocks still works, it just takes longer — and the recipe is
+          flagged.</td></tr>
+        <tr><th>Inputs nobody sells</th><td>Some inputs can't be bought anywhere — the Physical
+          Bitcoin that gets cut in half, for one. The only one you can craft with is one you
+          already own, so it costs what you'd have got for selling it.</td></tr>
+        <tr><th>Thin markets</th><td>A flea price backed by fewer listings than
+          <b>min listings</b> is not trusted as a sale price. When this page was built, a
+          Vepr-to-AKM conversion topped the whole ranking at 9,000 ₽/min on the strength of a single
+          AKM listed at 100,000 ₽, while Prapor sold the same rifle for 53,737. For inputs a thin
+          price is still used, because it's the only price there is, and the recipe is
+          flagged.</td></tr>
+        <tr><th>Craft time</th><td>Base time × (1 − 0.75% per Crafting level), down to −37.5%.
+          Elite Crafting also runs two <i>different</i> recipes at once in the Workbench, Lavatory,
+          Nutrition Unit, Medstation and Intelligence Center, and the queue fills both
+          slots.</td></tr>
+        <tr><th>Bitcoin farm</th><td>Base time ÷ (1 + 0.041225 × (graphics cards − 1)). Crafting
+          skill doesn't speed it up, and the cards aren't consumed.</td></tr>
+        <tr><th>Tools &amp; weapons</th><td>Tools come back when the craft finishes, so they cost
+          nothing per craft; you just need to own one. A recipe that wants a <i>functional</i>
+          weapon is priced at that weapon's default preset, since a bare receiver won't
+          do.</td></tr>
+        <tr><th>Left out</th><td><b>Generator fuel</b> burns at the same rate whichever recipe is
+          running, so it never changes which one wins; the queue's total is shown before it.
+          <b>Scav Case and Cultist Circle</b> give random output with nothing to price.
+          <b>Quest crafts that need quest items</b> are one-offs, not income.</td></tr>
+      </table>
+      <p class="src">Craft-time, fee and bitcoin formulas as tarkov.dev implements them
+        (<a href="https://github.com/the-hideout/tarkov-dev/blob/main/src/components/crafts-table/index.jsx" target="_blank" rel="noopener">crafts table</a>,
+        <a href="https://github.com/the-hideout/tarkov-dev/blob/main/src/modules/flea-market-fee.mjs" target="_blank" rel="noopener">flea fee</a>,
+        <a href="https://github.com/the-hideout/tarkov-dev/blob/main/src/pages/bitcoin-farm-calculator/data.js" target="_blank" rel="noopener">bitcoin farm</a>);
+        the elite Crafting perk per <a href="https://escapefromtarkov.fandom.com/wiki/Crafting" target="_blank" rel="noopener">the wiki</a>.
+        Fee rates, station bonuses, graphics-card slots, recipes and prices all come live from the data.</p>
+    </div>
+  </details>
+</main>
+
+<footer>
+  data: <a href="https://tarkov.dev" target="_blank" rel="noopener">tarkov.dev</a> community JSON API
+  (prices a few minutes old) · verify in-game before committing rubles · not affiliated with Battlestate Games
+</footer>
+
+<div id="overlay"><div id="overlaymsg">loading…</div></div>
+
+<script>
+"use strict";
+const API = "https://json.tarkov.dev";
+const $ = id => document.getElementById(id);
+const fmt = n => Math.round(n).toLocaleString("en-US");
+const fmtN = n => Number.isInteger(n) ? String(n) : String(+n.toFixed(2));
+const esc = t => String(t).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function fmtDur(secs) {
+  const m = Math.round(secs / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+// Mechanics the data doesn't carry; sources are in the legend.
+const CRAFT_CUT_PER_LEVEL = 0.0075;   // Crafting: −0.75% craft time per level…
+const CRAFT_CUT_LEVELS = 50;          // …bottoming out at −37.5%
+const ELITE = 51;
+const GPU_BOOST = 0.041225;           // bitcoin farm speed-up per card past the first
+const AREA = { workbench: 10, lavatory: 2, nutrition: 8, medstation: 7, intel: 11, bitcoin: 20 };
+// elite Crafting runs two different recipes at once in these
+const TWIN_AREAS = new Set([AREA.workbench, AREA.lavatory, AREA.nutrition,
+                            AREA.medstation, AREA.intel]);
+
+// ---------------------------------------------------------------- data
+
+let DB = null;
+
+async function getJson(path) {
+  const r = await fetch(API + path, { cache: "no-cache", headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
+  return r.json();
+}
+
+async function loadDB(mode) {
+  const need = ["items", "items_en", "crafts", "hideout", "hideout_en", "traders", "traders_en"];
+  const nice = p => p.catch(() => null);          // task names are a nicety
+  const [it, itn, cr, hd, hdn, trd, trdn, tk, tkn] = await Promise.all([
+    ...need.map(f => getJson(`/${mode}/${f}`)),
+    nice(getJson(`/${mode}/tasks`)), nice(getJson(`/${mode}/tasks_en`))]);
+  const items = it.data.items, names = itn.data;
+  const stations = {};
+  for (const [id, s] of Object.entries(hd.data))
+    stations[id] = { id, name: hdn.data[s.name] || s.normalizedName || id,
+                     areaType: s.areaType, levels: s.levels || [] };
+  const traderName = {}, traderMax = {};
+  for (const [id, t] of Object.entries(trd.data)) {
+    traderName[id] = trdn.data[t.name] || t.normalizedName || id;
+    traderMax[id] = (t.levels || []).length || 1;
+  }
+  const tasks = (tk && tk.data && tk.data.tasks) || {}, taskNames = (tkn && tkn.data) || {};
+  const db = {
+    mode, items, stations, traderName, traderMax,
+    crafts: cr.data || [],
+    flea: it.data.fleaMarket || {},
+    name: id => { const x = items[id]; return x ? (names[x.name] || x.normalizedName || id) : id; },
+    taskName: id => { const t = tasks[id]; return t ? (taskNames[t.name] || t.normalizedName || "a task") : "a task"; },
+  };
+  // stations that craft anything, most recipes first, bitcoin farm last
+  const count = {};
+  for (const r of db.crafts) count[r.station] = (count[r.station] || 0) + 1;
+  db.craftStations = Object.keys(count).filter(id => stations[id])
+    .map(id => ({ ...stations[id], recipes: count[id] }))
+    .sort((a, b) => (a.areaType === AREA.bitcoin) - (b.areaType === AREA.bitcoin)
+                    || b.recipes - a.recipes);
+  // traders that sell an input or buy an output
+  const uses = {};
+  const bump = t => { uses[t] = (uses[t] || 0) + 1; };
+  for (const r of db.crafts) {
+    for (const x of r.requiredItems || [])
+      for (const o of (items[x.item] || {}).buyFromTrader || []) bump(o.trader);
+    for (const o of (items[r.productItem.item] || {}).sellToTrader || []) bump(o.trader);
+  }
+  db.recipeTraders = Object.keys(uses).filter(id => traderName[id])
+    .map(id => ({ id, name: traderName[id], max: traderMax[id], uses: uses[id] }))
+    .sort((a, b) => b.uses - a.uses);
+  return db;
+}
+
+// ---------------------------------------------------------------- economics
+
+const fleaBanned = it => (it.types || []).includes("noFlea");
+const thinBook = (it, S) => (it.lastOfferCount || 0) < S.minOffers;
+const fleaPrice = (it, S) => S.basis === "avg"
+  ? (it.avg24hPrice || it.lastLowPrice || 0) : (it.lastLowPrice || 0);
+
+// Intelligence Center 3 carries a RagfairCommission bonus (−30% today), which
+// Hideout Management strengthens by 1% per level.
+function feeCut(S) {
+  let cut = 0;
+  for (const st of Object.values(DB.stations))
+    for (const L of st.levels)
+      if (L.level <= (S.levels[st.id] ?? 0))
+        for (const b of L.bonuses || [])
+          if (b.type === "RagfairCommission") cut = Math.max(cut, -b.value);
+  return Math.min(cut * (1 + 0.01 * S.hm), 1);
+}
+
+function fleaFee(base, price, S) {
+  if (!base || !price) return 0;
+  const Ti = DB.flea.sellOfferFeeRate ?? 0.05, Tr = DB.flea.sellRequirementFeeRate ?? 0.05;
+  let P0 = Math.log10(base / price), PR = Math.log10(price / base);
+  if (price < base) P0 = Math.pow(P0, 1.08); else PR = Math.pow(PR, 1.08);
+  return Math.ceil(base * Ti * Math.pow(4, P0) + price * Tr * Math.pow(4, PR)) * (1 - S.feeCut);
+}
+
+// The most one unit fetches: an unlocked trader, or a flea listing net of its
+// fee. List prices are searched downward from the market price, because the
+// fee rises steeply above an item's base price and undercutting can net more.
+function bestSale(iid, S) {
+  const it = DB.items[iid];
+  if (!it) return null;
+  let trader = null;
+  for (const o of it.sellToTrader || [])
+    if (S.traders[o.trader] > 0 && o.priceRUB && (!trader || o.priceRUB > trader.unit))
+      trader = { unit: o.priceRUB, where: DB.traderName[o.trader] };
+  let flea = null;
+  const p0 = fleaPrice(it, S);
+  if (S.sellFlea && p0 && !fleaBanned(it) && !thinBook(it, S))
+    for (let k = 100; k >= 20; k--) {
+      const list = Math.floor(p0 * k / 100), fee = fleaFee(it.basePrice, list, S);
+      if (!flea || list - fee > flea.unit) flea = { unit: list - fee, where: "Flea", list, fee };
+    }
+  const info = { trader, flea, offers: it.lastOfferCount || 0, banned: fleaBanned(it),
+                 thin: !!p0 && !fleaBanned(it) && thinBook(it, S) };
+  const best = flea && (!trader || flea.unit > trader.unit) ? flea : trader;
+  return best ? { ...info, unit: best.unit, where: best.where } : { ...info, unit: null };
+}
+
+// Cheapest way to get `count` of an input: trader offers your loyalty allows,
+// each filled up to its per-restock limit, then the flea for the rest.
+function sourceInput(x, S) {
+  let it = DB.items[x.item];
+  if (!it) return { problem: "unknown item" };
+  const functional = !!(x.attributes || {}).functional;
+  if (functional) {                     // a bare receiver isn't a functional weapon
+    const dp = (it.properties || {}).defaultPreset;
+    if (typeof dp === "string" && DB.items[dp]) it = DB.items[dp];
+  }
+  const offers = [];
+  if (S.source !== "flea")
+    for (const o of it.buyFromTrader || []) {
+      const have = S.traders[o.trader] ?? 0;
+      if ((o.taskUnlock && !S.taskLocked) || !have || (o.minTraderLevel || 1) > have || !o.priceRUB) continue;
+      offers.push({ price: o.priceRUB, limit: o.buyLimit || Infinity, task: o.taskUnlock,
+                    src: `${DB.traderName[o.trader]} ${o.minTraderLevel || 1}` });
+    }
+  const fp = S.source !== "trader" && !fleaBanned(it) ? fleaPrice(it, S) : 0;
+  if (fp) offers.push({ price: fp, limit: Infinity, src: "Flea",
+                        thin: thinBook(it, S), offers: it.lastOfferCount || 0 });
+  offers.sort((a, b) => a.price - b.price);
+
+  let need = x.count, cost = 0;
+  const parts = [];
+  for (const o of offers) {
+    if (need <= 1e-9) break;
+    const take = Math.min(need, o.limit);
+    cost += take * o.price; need -= take;
+    parts.push({ ...o, n: take });
+  }
+  if (need > 1e-9 && parts.length) {
+    // every usable offer is limited per restock: buying across restocks still
+    // works, it just takes longer — price the remainder at the dearest one
+    const top = offers[offers.length - 1];
+    cost += need * top.price;
+    parts.push({ ...top, n: need, overLimit: true });
+  }
+  if (parts.length) return { it, functional, cost, parts };
+
+  const traderOffers = it.buyFromTrader || [];
+  const onFlea = !fleaBanned(it) && !!(it.lastLowPrice || it.avg24hPrice);
+  if (!traderOffers.length && !onFlea) {
+    // Nobody sells it, so the only one you can craft with is one you already
+    // own — and using it costs what you'd have got for selling it.
+    const s = bestSale(it.id, S);
+    if (s && s.unit) return { it, functional, cost: s.unit * x.count,
+      parts: [{ n: x.count, price: s.unit, src: `your own (sells to ${s.where})`, own: true }] };
+    return { it, functional, problem: "can't be bought or sold anywhere" };
+  }
+  const gated = traderOffers.length && traderOffers.every(o => o.taskUnlock);
+  return { it, functional, problem:
+      S.source === "trader" && !traderOffers.length ? "only on the flea, and you're buying from traders"
+    : S.source === "flea" && !onFlea ? "not on the flea, and you're buying there only"
+    : gated && !S.taskLocked ? `only sold once a task unlocks it (${DB.taskName(traderOffers[0].taskUnlock)})`
+    : "no trader sells it at your loyalty levels" };
+}
+
+function evaluate(S) {
+  const res = { rows: [], unvalued: [], locked: 0, questOnly: 0, taskHidden: 0, noCards: 0 };
+  for (const r of DB.crafts) {
+    const st = DB.stations[r.station];
+    if (!st) continue;
+    if ((r.requiredQuestItems || []).length) { res.questOnly++; continue; }
+    if ((S.levels[r.station] ?? 0) < r.level) { res.locked++; continue; }
+    if (r.taskUnlock && !S.taskLocked) { res.taskHidden++; continue; }
+    const bitcoin = st.areaType === AREA.bitcoin;
+    if (bitcoin && S.gpus < 1) { res.noCards++; continue; }
+
+    const row = { r, st, bitcoin, ins: [], tools: [], cost: 0, problems: [],
+                  flags: new Set(), inputTasks: new Set() };
+    for (const x of r.requiredItems || []) {
+      if ((x.attributes || {}).tool) { row.tools.push(x.item); continue; }
+      const s = sourceInput(x, S);
+      row.ins.push({ x, s });
+      if (s.problem) { row.problems.push(`${DB.name(x.item)}: ${s.problem}`); continue; }
+      row.cost += s.cost;
+      for (const p of s.parts) {
+        if (p.thin) row.flags.add("thin input");
+        if (p.overLimit) row.flags.add("restock limit");
+        if (p.own) row.flags.add("uses your own");
+        if (p.task && p.task !== r.taskUnlock) row.inputTasks.add(p.task);
+      }
+    }
+    const out = r.productItem;
+    row.sale = bestSale(out.item, S);
+    if (!row.sale || !row.sale.unit) {
+      const s = row.sale || {};
+      row.problems.push(`${DB.name(out.item)}: ` + (s.banned ? "flea-banned and no unlocked trader buys it"
+        : s.thin ? `only ${s.offers} flea listing${s.offers === 1 ? "" : "s"} and no unlocked trader buys it`
+        : !S.sellFlea ? "no unlocked trader buys it and flea selling is off"
+        : "nothing buys it"));
+    }
+    row.secs = bitcoin ? r.duration / (1 + (S.gpus - 1) * GPU_BOOST)
+                       : r.duration * (1 - Math.min(S.craft, CRAFT_CUT_LEVELS) * CRAFT_CUT_PER_LEVEL);
+    if (row.problems.length) { res.unvalued.push(row); continue; }
+    row.revenue = row.sale.unit * out.count;
+    row.profit = row.revenue - row.cost;
+    row.ppm = row.profit / (row.secs / 60);
+    res.rows.push(row);
+  }
+  res.rows.sort((a, b) => b.ppm - a.ppm);
+  res.rows.forEach((row, i) => { row.rank = i + 1; });
+  return res;
+}
+
+// One craft per station — two different ones at elite Crafting in the twin
+// areas — taking the best profitable recipes.
+function bestQueue(res, S) {
+  const queue = new Map();
+  for (const st of DB.craftStations)
+    if ((S.levels[st.id] ?? 0) > 0) queue.set(st.id, { st, picks: [] });
+  for (const row of res.rows) {
+    const q = queue.get(row.st.id);
+    if (!q || row.profit <= 0) continue;
+    const slots = S.craft >= ELITE && TWIN_AREAS.has(row.st.areaType) ? 2 : 1;
+    if (q.picks.length >= slots) continue;
+    if (q.picks.some(p => p.r.productItem.item === row.r.productItem.item)) continue;
+    q.picks.push(row);
+  }
+  return [...queue.values()];
+}
+
+// ---------------------------------------------------------------- rendering
+
+function itemLink(id) {
+  const it = DB.items[id];
+  return it && it.link
+    ? `<a href="${esc(it.link)}" target="_blank" rel="noopener">${esc(DB.name(id))}</a>`
+    : esc(DB.name(id));
+}
+
+function recipeLabel(row) {
+  const r = row.r;
+  let h = `${fmtN(r.productItem.count)} × ${esc(DB.name(r.productItem.item))}`;
+  if (r.taskUnlock) h += `<span class="badge task" title="Unlocked by completing this task">task: ${esc(DB.taskName(r.taskUnlock))}</span>`;
+  for (const t of row.inputTasks || [])
+    h += `<span class="badge task" title="An input is bought from a trader offer this task unlocks">input task: ${esc(DB.taskName(t))}</span>`;
+  if ((r.gameEditions || []).length) h += `<span class="badge" title="${esc(r.gameEditions.join(", "))}">EOD / Unheard only</span>`;
+  for (const f of row.flags || []) h += `<span class="badge warn">${esc(f)}</span>`;
+  return h;
+}
+
+function renderQueue(queue, S) {
+  let total = 0;
+  let h = `<tr><th class="l">station</th><th class="l">run this</th><th>time</th>
+    <th>profit / craft</th><th>₽ / min</th><th>₽ / hour</th></tr>`;
+  for (const { st, picks } of queue) {
+    const name = `${esc(st.name)} <span class="lvl">${S.levels[st.id]}</span>`;
+    if (!picks.length) {
+      h += `<tr class="idle"><td class="l">${name}</td>
+        <td class="l" colspan="5">nothing turns a profit here — leave it idle</td></tr>`;
+      continue;
+    }
+    picks.forEach((p, i) => {
+      total += p.ppm;
+      h += `<tr><td class="l">${i ? `<span class="twin">↳ second slot</span>` : name}</td>
+        <td class="item">${recipeLabel(p)}</td><td>${fmtDur(p.secs)}</td>
+        <td class="pos">${fmt(p.profit)}</td><td class="ppm">${fmt(p.ppm)}</td>
+        <td>${fmt(p.ppm * 60)}</td></tr>`;
+    });
+  }
+  if (!queue.length) h += `<tr class="idle"><td class="l" colspan="6">no crafting stations built</td></tr>`;
+  else h += `<tr class="total"><td class="l" colspan="4">all of it together
+      <span class="dim">— before generator fuel</span></td>
+    <td class="ppm">${fmt(total)}</td><td>${fmt(total * 60)}</td></tr>`;
+  $("queue").innerHTML = h;
+}
+
+const openRows = new Set();
+
+function detail(row, S) {
+  const r = row.r, out = r.productItem;
+  let h = `<div class="det"><table>
+    <tr><th>input</th><th class="num">qty</th><th>bought from</th><th class="num">cost</th></tr>`;
+  for (const { x, s } of row.ins) {
+    const nm = itemLink(x.item) + (s.functional
+      ? ` <span class="note">functional — priced as the default preset</span>` : "");
+    const how = s.parts.map(p => `${fmtN(p.n)} × ${esc(p.src)} @ ${fmt(p.price)}`
+      + (p.task ? ` <span class="note">after ${esc(DB.taskName(p.task))}</span>` : "")
+      + (p.thin ? ` <span class="warn">only ${p.offers} listing${p.offers === 1 ? "" : "s"}</span>` : "")
+      + (p.overLimit ? ` <span class="warn">over the restock limit</span>` : "")).join(" + ");
+    h += `<tr><td>${nm}</td><td class="num">${fmtN(x.count)}</td><td>${how}</td>
+      <td class="num">${fmt(s.cost)}</td></tr>`;
+  }
+  if (!row.ins.length) h += `<tr><td colspan="4" class="note">no consumed inputs</td></tr>`;
+  h += `<tr class="sum"><td colspan="3">inputs</td><td class="num">${fmt(row.cost)}</td></tr></table>`;
+  if (row.tools.length)
+    h += `<div>tools, returned when the craft finishes: ${row.tools.map(itemLink).join(", ")}</div>`;
+
+  const s = row.sale, routes = [];
+  if (s.flea) routes.push(`<span class="${s.where === "Flea" ? "pick" : ""}">flea</span>: list at
+    ${fmt(s.flea.list)}, fee ${fmt(s.flea.fee)} → ${fmt(s.flea.unit)} each
+    <span class="note">(${s.offers} listings)</span>`);
+  else if (s.banned) routes.push(`flea: banned for this item`);
+  else if (s.thin) routes.push(`flea: ignored, only ${s.offers} listing${s.offers === 1 ? "" : "s"}`);
+  else if (!S.sellFlea) routes.push(`flea: selling there is off`);
+  if (s.trader) routes.push(`<span class="${s.where !== "Flea" ? "pick" : ""}">${esc(s.trader.where)}</span>
+    pays ${fmt(s.trader.unit)} each`);
+  h += `<div>sell ${fmtN(out.count)} × ${itemLink(out.item)} — ${routes.join(" · ")}
+    → <b>${fmt(row.revenue)}</b></div>`;
+
+  let time = fmtDur(row.secs);
+  if (row.bitcoin) time += ` <span class="note">(${fmtDur(r.duration)} base ÷
+    ${(1 + (S.gpus - 1) * GPU_BOOST).toFixed(2)} for ${S.gpus} card${S.gpus === 1 ? "" : "s"})</span>`;
+  else if (S.craft > 0) time += ` <span class="note">(${fmtDur(r.duration)} base −
+    ${+(Math.min(S.craft, CRAFT_CUT_LEVELS) * CRAFT_CUT_PER_LEVEL * 100).toFixed(2)}% Crafting)</span>`;
+  h += `<div>${fmt(row.revenue)} − ${fmt(row.cost)} = <b>${fmt(row.profit)}</b> per craft,
+    ÷ ${time} = <b class="${row.ppm > 0 ? "pick" : ""}">${fmt(row.ppm)} ₽/min</b></div>`;
+  return h + `</div>`;
+}
+
+let last = null;
+
+function renderRanked() {
+  if (!last) return;
+  const { res, S } = last;
+  const q = $("filter").value.trim().toLowerCase();
+  const station = $("stationFilter").value, hideLosers = $("hideLosers").checked;
+  const rows = res.rows.filter(row => {
+    if (station && row.st.id !== station) return false;
+    if (hideLosers && row.profit <= 0) return false;
+    if (!q) return true;
+    return [DB.name(row.r.productItem.item), row.st.name,
+            ...row.ins.map(i => DB.name(i.x.item)), ...row.tools.map(t => DB.name(t))]
+      .join("\n").toLowerCase().includes(q);
+  });
+  let h = `<tr><th class="l">#</th><th class="l">makes</th><th class="l">station</th><th>time</th>
+    <th>inputs</th><th>sells for</th><th>profit</th><th>₽ / min</th></tr>`;
+  for (const row of rows) {
+    const id = row.r.id, open = openRows.has(id);
+    h += `<tr class="rec${open ? " open" : ""}" data-id="${esc(id)}" tabindex="0">
+      <td class="l rank">${row.rank}</td>
+      <td class="item">${recipeLabel(row)}</td>
+      <td class="l">${esc(row.st.name)} <span class="lvl">${row.r.level}</span></td>
+      <td>${fmtDur(row.secs)}</td>
+      <td>${fmt(row.cost)}</td>
+      <td><span class="where">${esc(row.sale.where)}</span> ${fmt(row.revenue)}</td>
+      <td class="${row.profit > 0 ? "pos" : "neg"}">${fmt(row.profit)}</td>
+      <td class="${row.ppm > 0 ? "ppm" : "neg"}">${fmt(row.ppm)}</td></tr>`;
+    if (open) h += `<tr class="detail"><td colspan="8">${detail(row, S)}</td></tr>`;
+  }
+  if (!rows.length) h += `<tr class="idle"><td class="l" colspan="8">no recipe matches</td></tr>`;
+  $("ranked").innerHTML = h;
+  const losers = res.rows.filter(r => r.profit <= 0).length;
+  $("rankSub").textContent = `— ${res.rows.length} ranked, ${losers} of them lose money`
+    + (rows.length !== res.rows.length ? `, ${rows.length} shown` : "");
+}
+
+function renderUnvalued(res) {
+  $("unvaluedCount").textContent = `(${res.unvalued.length})`;
+  let h = `<tr><th class="l">makes</th><th class="l">station</th><th class="l">why not</th></tr>`;
+  for (const row of res.unvalued)
+    h += `<tr><td class="item">${recipeLabel(row)}</td>
+      <td class="l">${esc(row.st.name)} <span class="lvl">${row.r.level}</span></td>
+      <td class="item dim">${row.problems.map(esc).join("<br>")}</td></tr>`;
+  $("unvalued").innerHTML = h;
+}
+
+// ---------------------------------------------------------------- controls
+
+// The hideout, the skills and the sourcing rules describe the player, so they
+// persist between visits; the table filters don't.
+const PROFILE_KEY = "tarkarb.hideout.profile";
+// Loyalty levels are one fact about the player, shared by every TARKARB page.
+const TRADERS_KEY = "tarkarb.traders";
+function readJson(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "{}") || {}; }
+  catch { return {}; }                       // private window, blocked storage
+}
+const loadProfile = () => readJson(PROFILE_KEY);
+function saveProfile() {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify({
+      mode: $("mode").value, basis: $("basis").value, minOffers: +$("minOffers").value,
+      source: $("source").value, sellFlea: $("sellFlea").checked,
+      taskLocked: $("taskLocked").checked, craft: +$("craftSkill").value,
+      hm: +$("hmSkill").value, stations: stationLevels(),
+      gpus: $("gpus") ? +$("gpus").value : undefined,
+    }));
+    localStorage.setItem(TRADERS_KEY, JSON.stringify({ ...readJson(TRADERS_KEY), ...traderLevels() }));
+  } catch { /* nothing to do if storage is unavailable */ }
+}
+
+const stationLevels = () => Object.fromEntries(
+  [...document.querySelectorAll("#stationctl select")].map(s => [s.dataset.station, +s.value]));
+const traderLevels = () => Object.fromEntries(
+  [...document.querySelectorAll("#traderctl select")].map(s => [s.dataset.trader, +s.value]));
+
+function levelSelect(max, want, key, value) {
+  const sel = document.createElement("select");
+  sel.dataset[key] = value;
+  for (let l = 0; l <= max; l++) {
+    const o = document.createElement("option");
+    o.value = l; o.textContent = l === 0 ? "—" : l;
+    if (l === want) o.selected = true;
+    sel.appendChild(o);
+  }
+  const mark = () => sel.classList.toggle("locked", sel.value === "0");
+  sel.addEventListener("change", mark);
+  mark();
+  return sel;
+}
+
+function gpuCapacity() {
+  const farm = DB.craftStations.find(s => s.areaType === AREA.bitcoin);
+  if (!farm) return 0;
+  const lvl = stationLevels()[farm.id] ?? 0;
+  let cap = 0;
+  for (const L of farm.levels)
+    if (L.level <= lvl)
+      for (const b of L.bonuses || []) if (b.type === "AdditionalSlots") cap += b.value;
+  return cap;
+}
+function syncGpus() {
+  const inp = $("gpus");
+  if (!inp) return;
+  const cap = gpuCapacity();
+  inp.max = cap;
+  inp.disabled = cap === 0;
+  if (+inp.value > cap) inp.value = cap;
+}
+
+function buildStationControls() {
+  const prof = loadProfile(), saved = prof.stations || {};
+  const host = $("stationctl");
+  host.innerHTML = "";
+  for (const s of DB.craftStations) {
+    const max = s.levels.length;
+    const want = Object.prototype.hasOwnProperty.call(saved, s.id) ? Math.min(+saved[s.id], max) : max;
+    const lab = document.createElement("label");
+    lab.title = `${s.recipes} recipes`;
+    const sel = levelSelect(max, want, "station", s.id);
+    sel.addEventListener("change", () => { syncGpus(); saveProfile(); compute(); });
+    lab.append(s.name + " ", sel);
+    host.appendChild(lab);
+    if (s.areaType === AREA.bitcoin) {
+      const g = document.createElement("input");
+      g.id = "gpus"; g.type = "number"; g.min = 0; g.step = 1;
+      g.title = "Graphics cards installed in the farm";
+      const unit = document.createElement("span");
+      unit.className = "unit"; unit.textContent = "cards";
+      lab.append(" × ", g, unit);
+      g.value = prof.gpus ?? gpuCapacity();
+      syncGpus();
+      g.addEventListener("change", () => { syncGpus(); saveProfile(); compute(); });
+    }
+  }
+}
+
+function buildTraderControls() {
+  const saved = readJson(TRADERS_KEY);
+  const host = $("traderctl");
+  host.innerHTML = "";
+  for (const t of DB.recipeTraders) {
+    const want = Object.prototype.hasOwnProperty.call(saved, t.id) ? Math.min(+saved[t.id], t.max) : t.max;
+    const lab = document.createElement("label");
+    lab.title = `appears in ${t.uses} recipe buy/sell routes`;
+    const sel = levelSelect(t.max, want, "trader", t.id);
+    sel.addEventListener("change", () => { saveProfile(); compute(); });
+    lab.append(t.name + " ", sel);
+    host.appendChild(lab);
+  }
+}
+
+function buildStationFilter() {
+  const sel = $("stationFilter"), keep = sel.value;
+  sel.innerHTML = `<option value="">all</option>` + DB.craftStations
+    .map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+  sel.value = DB.craftStations.some(s => s.id === keep) ? keep : "";
+}
+
+function settings() {
+  const int = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number.isFinite(+v) ? +v : lo)));
+  const S = {
+    levels: stationLevels(),
+    gpus: $("gpus") ? int($("gpus").value, 0, gpuCapacity()) : 0,
+    craft: int($("craftSkill").value, 0, ELITE),
+    hm: int($("hmSkill").value, 0, ELITE),
+    traders: traderLevels(),
+    basis: $("basis").value,
+    minOffers: int($("minOffers").value, 0, 1e6),
+    source: $("source").value,
+    sellFlea: $("sellFlea").checked,
+    taskLocked: $("taskLocked").checked,
+  };
+  S.feeCut = feeCut(S);
+  return S;
+}
+
+function setStatus(html) { $("status").innerHTML = html; }
+function overlay(msg) {
+  $("overlay").style.display = msg ? "flex" : "none";
+  if (msg) $("overlaymsg").textContent = msg;
+}
+
+function compute() {
+  if (!DB) return;
+  const S = settings();
+  const res = evaluate(S);
+  last = { S, res };
+  renderQueue(bestQueue(res, S), S);
+  renderRanked();
+  renderUnvalued(res);
+  $("lgRates").textContent = `${+((DB.flea.sellOfferFeeRate ?? 0.05) * 100).toFixed(2)}% / `
+    + `${+((DB.flea.sellRequirementFeeRate ?? 0.05) * 100).toFixed(2)}% in this economy`;
+  const bits = [`<span class="ok">${res.rows.length} recipes ranked</span>`];
+  if (res.locked) bits.push(`${res.locked} need a higher station level`);
+  if (res.taskHidden) bits.push(`${res.taskHidden} task-locked recipes hidden`);
+  if (res.noCards) bits.push(`bitcoin farm has no cards`);
+  bits.push(`${res.questOnly} one-off quest crafts left out`);
+  if (S.feeCut) bits.push(`flea fee −${+(S.feeCut * 100).toFixed(1)}%`);
+  bits.push(`${DB.mode === "regular" ? "PVP" : DB.mode.toUpperCase()} prices via tarkov.dev`);
+  setStatus(bits.join(" · "));
+}
+
+let bootToken = 0;
+async function boot(mode) {
+  const token = ++bootToken;
+  overlay(`downloading ${mode === "regular" ? "PVP" : mode.toUpperCase()} recipes and prices…`);
+  setStatus("loading…");
+  try {
+    const db = await loadDB(mode);
+    if (token !== bootToken) return;          // a newer mode switch won
+    DB = db;
+    buildStationControls();
+    buildTraderControls();
+    buildStationFilter();
+    overlay(null);
+    compute();
+  } catch (e) {
+    if (token !== bootToken) return;
+    overlay(null);
+    setStatus(`<span class="err">couldn't load data — ${esc(e.message)}</span>`);
+  }
+}
+
+// restore the player before the first download so it fetches the right economy
+(() => {
+  const p = loadProfile();
+  const pick = (id, v) => {
+    if (v == null) return;
+    const el = $(id);
+    if (el.tagName === "SELECT" && ![...el.options].some(o => o.value === String(v))) return;
+    if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+  };
+  pick("mode", p.mode); pick("basis", p.basis); pick("minOffers", p.minOffers);
+  pick("source", p.source); pick("sellFlea", p.sellFlea); pick("taskLocked", p.taskLocked);
+  pick("craftSkill", p.craft); pick("hmSkill", p.hm);
+})();
+
+for (const id of ["basis", "minOffers", "source", "sellFlea", "taskLocked", "craftSkill", "hmSkill"])
+  $(id).addEventListener("change", () => { saveProfile(); compute(); });
+$("mode").addEventListener("change", () => { saveProfile(); openRows.clear(); boot($("mode").value); });
+$("filter").addEventListener("input", renderRanked);
+$("stationFilter").addEventListener("change", renderRanked);
+$("hideLosers").addEventListener("change", renderRanked);
+
+function toggleRow(tr) {
+  const id = tr.dataset.id;
+  if (openRows.has(id)) openRows.delete(id); else openRows.add(id);
+  renderRanked();
+  const again = document.querySelector(`#ranked tr.rec[data-id="${CSS.escape(id)}"]`);
+  if (again) again.focus({ preventScroll: true });
+}
+$("ranked").addEventListener("click", e => {
+  if (e.target.closest("a")) return;           // item links open tarkov.dev
+  const tr = e.target.closest("tr.rec");
+  if (tr) toggleRow(tr);
+});
+$("ranked").addEventListener("keydown", e => {
+  const tr = e.target.closest("tr.rec");
+  if (tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleRow(tr); }
+});
+
+boot($("mode").value);
+</script>
+</body>
+</html>

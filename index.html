@@ -31,6 +31,8 @@
     border-radius: 4px; padding: 4px 8px; font: 13px var(--mono); }
   .ctl input[type=number] { width: 80px; }
   .ctl input[type=checkbox] { accent-color: var(--gold); }
+  nav.pages { margin-left: auto; display: flex; gap: 14px; font-size: 12px; letter-spacing: 1px; }
+  nav.pages .here { color: var(--gold); }
   button { background: var(--gold); color: #1a1912; border: 0; border-radius: 4px;
            padding: 6px 16px; font-weight: 600; cursor: pointer; letter-spacing: 1px; }
   button:hover { filter: brightness(1.1); }
@@ -88,7 +90,7 @@
     </select>
   </label>
   <button id="refresh">SCAN</button>
-  <a href="builder.html" style="margin-left:auto">GUN BUILDER →</a>
+  <nav class="pages"><span class="here">ARBITRAGE</span><a href="builder.html">GUN BUILDER</a><a href="hideout.html">HIDEOUT</a></nav>
 </header>
 
 <div id="status">loading…</div>

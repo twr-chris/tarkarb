@@ -29,6 +29,8 @@
   .ctl input[type=number] { width: 95px; }
   .ctl input[type=checkbox] { accent-color: var(--gold); }
   #gun { max-width: 300px; }
+  nav.pages { margin-left: auto; display: flex; gap: 14px; font-size: 12px; letter-spacing: 1px; }
+  nav.pages .here { color: var(--gold); }
   button { background: var(--gold); color: #1a1912; border: 0; border-radius: 4px;
            padding: 6px 16px; font-weight: 600; cursor: pointer; letter-spacing: 1px; }
   button:disabled { opacity: .5; cursor: default; }
@@ -184,7 +186,7 @@
   <label class="ctl" title="Buy any part that has a durability rating from a trader, who always sells undamaged. A flea listing's condition is unknown and unknowable from this data — a cheap one is either worn or simply mispriced, and both look identical."><input id="freshDurable" type="checkbox" checked> 100/100</label>
   <label class="ctl" title="Leave sights, optics, lights, lasers and sight mounts off. What optic you run depends on your engagement range, which the optimiser cannot know — left in, it fits absurd ones for incidental stat reasons. Fit your own in-game."><input id="excludeOptics" type="checkbox" checked> no optics</label>
   <button id="run">COMPUTE</button>
-  <a href="index.html" style="margin-left:auto">← ARBITRAGE BOARD</a>
+  <nav class="pages"><a href="index.html">ARBITRAGE</a><span class="here">GUN BUILDER</span><a href="hideout.html">HIDEOUT</a></nav>
 </header>
 
 <div id="traderbar" title="Your unlocked loyalty level with each trader that sells weapon parts; 0 means locked out entirely">
@@ -810,6 +812,12 @@ let traderList = [];
 // loyalty, economy, sourcing rules — persist between visits. The exploration
 // controls (budget, stat, colour-by, lean) deliberately do not.
 const PROFILE_KEY = "tarkarb.builder.profile";
+// Loyalty levels are one fact about the player, shared by every TARKARB page.
+const TRADERS_KEY = "tarkarb.traders";
+function loadTraders() {
+  try { return JSON.parse(localStorage.getItem(TRADERS_KEY) || "{}") || {}; }
+  catch { return {}; }
+}
 function loadProfile() {
   try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || "{}") || {}; }
   catch { return {}; }                       // private window, blocked storage
@@ -824,6 +832,7 @@ function saveProfile() {
       excludeOptics: $("excludeOptics").checked,
       traders: traderLevels(),
     }));
+    localStorage.setItem(TRADERS_KEY, JSON.stringify({ ...loadTraders(), ...traderLevels() }));
   } catch { /* nothing to do if storage is unavailable */ }
 }
 
@@ -831,7 +840,7 @@ function saveProfile() {
 // from the data rather than hardcoded. Level 0 locks the trader out entirely.
 function buildTraderControls(traders) {
   traderList = traders;
-  const saved = loadProfile().traders || {};
+  const saved = { ...(loadProfile().traders || {}), ...loadTraders() };
   const host = $("traderctl");
   host.innerHTML = "";
   for (const t of traders) {
