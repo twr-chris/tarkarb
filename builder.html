@@ -338,6 +338,13 @@ async function loadDB(mode) {
   };
   for (const it of Object.values(items))
     for (const c of it.conflictingItems || []) db.conflictUniverse.add(c);
+  db.presetsOf = new Map();
+  for (const it of Object.values(items)) {
+    const p = it.properties || {};
+    if (p.propertiesType !== "ItemPropertiesPreset" || !p.baseItem) continue;
+    if (!db.presetsOf.has(p.baseItem)) db.presetsOf.set(p.baseItem, []);
+    db.presetsOf.get(p.baseItem).push(it.id);
+  }
   DBs[mode] = db;
   return db;
 }
@@ -409,11 +416,11 @@ function priceOf(db, iid, source, traderLL, freshDurable) {
         best = [o.priceRUB, `${db.traderName[o.trader] ?? "trader"} L${o.minTraderLevel}`];
     }
   }
-  // 100/100 was wanted but no trader in the data stocks this item. That is
-  // usually an upstream gap rather than reality: buyFromTrader gun assortments
-  // are severely incomplete (89% of weapons carry no trader offer at all, and
-  // Peacekeeper none — the-hideout/tarkov-api#481). Fall back to flea and mark
-  // the source rather than declaring a buildable gun unbuildable.
+  // 100/100 was wanted but no trader sells this item. For a weapon that is
+  // usually because traders sell it assembled: the offer sits on a preset, not
+  // the bare weapon, and frontier() starts builds from those presets. This
+  // fallback is only reached for a gun no trader sells in any configuration —
+  // price it from the flea and mark it rather than calling it unbuildable.
   if (!best && forceTrader && fleaOK) best = [it.lastLowPrice, "Flea — condition unverified"];
   return best;
 }
@@ -473,6 +480,8 @@ function frontier(db, gunId, opts) {
   // different subtree offers no slot for it at all.
   const locked = new Set(opts.locked || []);
   const memo = new Map();
+  const NO_PARTS = new Map();
+  let owned = NO_PARTS;                 // parts the current starting preset came with
   const excludedSet = new Set();
   const minMagCap = usableMag ? defaultMagCap(db, gunId) : 0;
   const magOK = cand => {
@@ -584,7 +593,8 @@ function frontier(db, gunId, opts) {
     if (memo.has(mk) && !stack.has(iid)) return memo.get(mk);
     const it = db.items[iid];
     if (!it) return [];
-    const pr = priceOf(db, iid, source, traderLL, freshDurable);
+    const pr = owned.has(iid) ? [0, "came with the preset"]
+                              : priceOf(db, iid, source, traderLL, freshDurable);
     if (!pr && !freeRoot) { excludedSet.add(iid); return []; }
     const cost0 = pr ? pr[0] : 0;
     const src0 = pr ? pr[1] : "included with weapon";
@@ -622,35 +632,127 @@ function frontier(db, gunId, opts) {
     return prune(raw, SLOT_CAP);
   }
 
+  // Traders sell guns assembled. Of 171 weapons, 18 carry a trader offer on the
+  // bare weapon item and 132 on a preset of it, so reading only the bare item
+  // made nearly every gun look unsellable by traders. Every preset a trader
+  // will sell you is a starting point whose parts are already paid for: the
+  // frontier is solved from each one (and from the bare gun, if buyable) and
+  // the results merged.
+  function startingPoints() {
+    const gpr = priceOf(db, gunId, source, traderLL, freshDurable);
+    const presets = [];
+    if (source !== "flea" || freshDurable) {
+      for (const pid of db.presetsOf.get(gunId) || []) {
+        const pit = db.items[pid];
+        let best = null;
+        for (const o of pit.buyFromTrader || []) {
+          const have = traderLL[o.trader] ?? 0;
+          if (o.taskUnlock || !have || (o.minTraderLevel || 1) > have || !o.priceRUB) continue;
+          if (!best || o.priceRUB < best.priceRUB) best = o;
+        }
+        if (!best) continue;
+        const parts = new Map();
+        for (const ci of pit.containsItems || []) {
+          const iid = typeof ci.item === "string" ? ci.item : ci.item?.id;
+          if (!iid || iid === gunId || db.props(iid).propertiesType === "ItemPropertiesAmmo") continue;
+          parts.set(iid, (parts.get(iid) || 0) + (ci.count || 1));
+        }
+        const pn = db.name(pid), gn = db.name(gunId);
+        const label = (pn.startsWith(gn) && pn.slice(gn.length).trim()) || pn;
+        presets.push({ c: best.priceRUB, owned: parts, label,
+          src: `${db.traderName[best.trader] ?? "trader"} L${best.minTraderLevel || 1}, ` +
+               `as the "${label}" preset` });
+      }
+    }
+    // an unverified flea receiver is only a fallback for guns no trader sells
+    const bare = gpr && !(/condition unverified/.test(gpr[1]) && presets.length)
+      ? { c: gpr[0], src: gpr[1], owned: NO_PARTS, label: "bare gun" } : null;
+    const out = bare ? [bare] : [];
+    for (const pr of presets) {
+      // A preset costing at least the bare gun plus all its parts bought
+      // separately can never start a cheaper build — skip the solve.
+      if (bare) {
+        let sum = 0;
+        for (const [iid, n] of pr.owned) {
+          const q = priceOf(db, iid, source, traderLL, freshDurable);
+          if (!q) { sum = Infinity; break; }
+          sum += q[0] * n;
+        }
+        if (pr.c >= bare.c + sum) continue;
+      }
+      out.push(pr);
+    }
+    return out;
+  }
+
+  // The solve treats a preset's parts as free however many times a build uses
+  // one. Now that each build's parts are known, charge for copies beyond what
+  // the preset contained, and drop builds that can't buy the extra.
+  function settle(o, base) {
+    if (!base.owned.size) return o;
+    const uses = new Map();
+    (function walk(b) {
+      for (const [k, v] of Object.entries(b)) {
+        if (k.startsWith("__")) continue;
+        if (base.owned.has(v[0])) uses.set(v[0], (uses.get(v[0]) || 0) + 1);
+        walk(v[1]);
+      }
+    })(o.b);
+    let extra = 0;
+    for (const [iid, n] of uses) {
+      const over = n - base.owned.get(iid);
+      if (over <= 0) continue;
+      const q = priceOf(db, iid, source, traderLL, freshDurable);
+      if (!q) return null;
+      extra += over * q[0];
+    }
+    if (!extra) return o;
+    if (budget != null && o.c + extra > budget) return null;
+    return { ...o, c: o.c + extra };
+  }
+
   const gp = db.props(gunId);
   const gun = db.items[gunId];
+  const bases = startingPoints();
   // If the receiver itself cannot be sourced the build is impossible — pricing
   // it at 0 would silently make every build look cheaper than it is.
-  const gpr = priceOf(db, gunId, source, traderLL, freshDurable);
-  if (!gpr) return { error: `${db.name(gunId)} cannot be bought` +
-    (freshDurable ? " from any trader at these levels — it carries durability, so " +
+  if (!bases.length) return { error: `${db.name(gunId)} cannot be bought, bare or as any preset,` +
+    (freshDurable ? " from a trader at these levels — it carries durability, so " +
       "100/100 can only be guaranteed by a trader. Untick 100/100 to allow flea." :
       " from the selected source at these trader levels — raise a level or widen the source.") };
-  let acc = [{ e: 0, r: 0, c: gpr[0], w: gun.weight || 0, b: { __src: gpr[1] },
-               cf: new Set(gun.conflictingItems || []), cids: new Set() }];
+  let acc = [], failure = null;
   const slots = gp.slots || [];
-  for (let i = 0; i < slots.length; i++) {
-    const slot = slots[i];
-    postMessage({ type: "progress", msg: `solving ${slot.nameId} (${i + 1}/${slots.length})…` });
-    const allowed = (slot.filters || {}).allowedItems || [];
-    let so = slotOptions(allowed, slot.required, new Set([gunId]),
-                         isMagSlot(slot, allowed), slot.nameId);
-    if (slot.required && !so.length) so = integralFallback(allowed, new Set([gunId]));
-    if (slot.required && !so.length)
-      return { error: `required slot ${slot.nameId} has no parts at all under filters` };
-    acc = merge(acc, slot.nameId || "?", so, BEAM_ROOT);
-    if (!acc.length) return { error: "no feasible build under constraints" };
+  for (let bi = 0; bi < bases.length; bi++) {
+    const base = bases[bi];
+    owned = base.owned;
+    memo.clear();                       // owned parts change prices, so re-solve subtrees
+    let run = [{ e: 0, r: 0, c: base.c, w: gun.weight || 0, b: { __src: base.src, __base: bi },
+                 cf: new Set(gun.conflictingItems || []), cids: new Set() }];
+    for (let i = 0; i < slots.length && run.length; i++) {
+      const slot = slots[i];
+      postMessage({ type: "progress", msg: (bases.length > 1 ? `${base.label}: ` : "") +
+        `solving ${slot.nameId} (${i + 1}/${slots.length})…` });
+      const allowed = (slot.filters || {}).allowedItems || [];
+      let so = slotOptions(allowed, slot.required, new Set([gunId]),
+                           isMagSlot(slot, allowed), slot.nameId);
+      if (slot.required && !so.length) so = integralFallback(allowed, new Set([gunId]));
+      if (slot.required && !so.length) {
+        failure = `required slot ${slot.nameId} has no parts at all under filters`;
+        run = [];
+        break;
+      }
+      run = merge(run, slot.nameId || "?", so, BEAM_ROOT);
+    }
+    for (const o of run) { const t = settle(o, base); if (t) acc.push(t); }
   }
+  owned = NO_PARTS;
+  if (bases.length > 1) acc = prune(acc, BEAM_ROOT);
+  if (!acc.length) return { error: failure || "no feasible build under constraints" };
 
   if (locked.size) {
     const idsOf = (b, out) => {
       for (const [k, v] of Object.entries(b)) {
-        if (k === "__src") continue;
+        if (k.startsWith("__")) continue;
         out.add(v[0]); idsOf(v[1], out);
       }
       return out;
@@ -664,16 +766,39 @@ function frontier(db, gunId, opts) {
       `no build can use ${locked.size === 1 ? "that locked part" : "all locked parts"} ` +
       `together under the current filters — unlock one, or widen source/budget` };
   }
+  // A preset's parts are free, so the same gun minus a part it came with costs
+  // exactly the same and performs worse — and grid pruning, which keeps one
+  // build per stat cell without comparing cells, lets those survive as a column
+  // of dots at the preset's price. Drop builds matched or beaten on recoil and
+  // ergonomics by another build at the same cost.
+  acc.sort((a, b) => a.c - b.c || a.r - b.r || b.e - a.e);
+  const kept = [];
+  let from = 0;                                  // first kept build at this cost
+  for (const o of acc) {
+    if (from < kept.length && kept[from].c !== o.c) from = kept.length;
+    let beaten = false;
+    for (let i = from; i < kept.length && !beaten; i++)
+      beaten = kept[i].r <= o.r + 1e-9 && kept[i].e >= o.e - 1e-9;
+    if (!beaten) kept.push(o);
+  }
+  acc = kept;
   const baseE = gp.ergonomics || 0, baseV = gp.recoilVertical || 0, baseH = gp.recoilHorizontal || 0;
-  function renderTree(b) {
+  // left: copies of each preset part still unaccounted for — the first uses
+  // came with the gun, any beyond that were bought (see settle).
+  function renderTree(b, left) {
     const out = [];
     for (const [k, v] of Object.entries(b)) {
-      if (k === "__src") continue;
+      if (k.startsWith("__")) continue;
       const [cid, cb] = v;
       const p = db.props(cid);
-      out.push({ slot: k, id: cid, name: db.name(cid), src: cb.__src || "?",
+      let src = cb.__src || "?";
+      if (left.has(cid)) {
+        if (left.get(cid) > 0) left.set(cid, left.get(cid) - 1);
+        else src = (priceOf(db, cid, source, traderLL, freshDurable) || [0, "?"])[1];
+      }
+      out.push({ slot: k, id: cid, name: db.name(cid), src,
                  e: p.ergonomics || 0, r: p.recoilModifier || 0,
-                 children: renderTree(cb) });
+                 children: renderTree(cb, left) });
     }
     return out;
   }
@@ -693,7 +818,7 @@ function frontier(db, gunId, opts) {
   // the barrel happens to sit and would read as nonsense ("1th device").
   function flatSlots(b, acc, depth, seen) {
     for (const [k, v] of Object.entries(b)) {
-      if (k === "__src") continue;
+      if (k.startsWith("__")) continue;
       const base = (depth > 0 && /^mod_stock(_\d+)?$/.test(k)) ? "mod_buttstock" : k;
       seen[base] = (seen[base] || 0) + 1;
       acc[seen[base] === 1 ? base : `${base}~${seen[base]}`] = db.name(v[0]);
@@ -707,10 +832,11 @@ function frontier(db, gunId, opts) {
     // vertical and horizontal are the SAME multiplier applied to two base
     // numbers (verified: 393/393 presets), so one exact value ranks both.
     rmul: 1 + o.r, rvExact: baseV * (1 + o.r),
-    src: o.b.__src, tree: renderTree(o.b), slots: flatSlots(o.b, {}, 0, {}),
+    src: o.b.__src, tree: renderTree(o.b, new Map(bases[o.b.__base].owned)),
+    slots: flatSlots(o.b, {}, 0, {}),
   })).sort((a, b) => a.c - b.c);
   return { points, gunName: db.name(gunId), excluded: excludedSet.size, minMagCap,
-    conditionUnverified: /condition unverified/.test(gpr[1]),
+    conditionUnverified: bases.some(b => /condition unverified/.test(b.src)),
     weapon: { angle: gp.recoilAngle ?? 90, dispersion: gp.recoilDispersion ?? 10,
               baseRv: baseV, baseRh: baseH } };
 }
@@ -913,8 +1039,8 @@ function bootWorker() {
       setStatus(`${m.gunName}: <span class="ok">${points.length} non-dominated builds</span> ` +
         `in ${(m.ms / 1000).toFixed(1)}s · ${m.excluded} parts unbuyable` +
         `${m.minMagCap ? ` · mag ≥ ${m.minMagCap}` : ""}` +
-        (m.conditionUnverified ? ` · <span class="err">no trader stocks this receiver ` +
-          `in the data (upstream gap) — priced from flea, condition unverified</span>` : "") +
+        (m.conditionUnverified ? ` · <span class="err">no trader sells this gun in any ` +
+          `configuration — priced from flea, condition unverified</span>` : "") +
         ` · click the chart`);
       drawChart();
       drawPattern(null);                     // stock pattern until a build is picked
